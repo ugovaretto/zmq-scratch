@@ -1,9 +1,12 @@
 //Load balancer example using C++11 threads and zeromq
 //Each client sends a string and workers reply with the reversed string;
 //Load balancing is obtained through a middle layer implemented with two
-//ROUTER sockets
+//ROUTER sockets; threads are stored into an STL collection
 //AUTHOR: UGO VARETTO
 //On Apple: clang++ -std=c++11 -stdlib=libc++ -framework ZeroMQ
+//Todo: implement move constructors setting copied object context and socket
+//to nullptr: this allows to properly destroy zeromq context and close socket
+//in the destructor if not NULL
 #include <thread> //C++11
 #include <iostream>
 #include <string>
@@ -109,10 +112,12 @@ int main(int argc, char** argv) {
     //running and a abort() will be called generating an error on termination;
     //a cleaner way is to handle termination directly in the worker threads
     //by:
-    // 1) using acync i/o and exit automatically if no requests are received
+    // 1) using async i/o and exit automatically if no requests are received
     //    after a specific amount of time OR
-    // 2) using asymc i/o and checking control messages on a separate channel OR
-    // 3) run indefinitely and handle Ctrl-C
+    // 2) using async i/o and checking control messages on a separate channel OR
+    // 3) using async i/o and checking a condition variable set from the thread
+    //    that invokes the destructor
+    // 4) run indefinitely and handle SIGINT/SIGTERM
     std::set_terminate(quiet_termination);
 	
     void* context = zmq_ctx_new();
