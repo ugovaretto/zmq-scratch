@@ -9,8 +9,11 @@
 #define __ZHELPERS_H_INCLUDED__
 
 //  Include a bunch of headers that we will need in the examples
-
+#ifdef __APPLE__
+#include <ZeroMQ/zmq.h>
+#else
 #include <zmq.h>
+#endif    
 
 #include <stdint.h>
 #include <stdio.h>
