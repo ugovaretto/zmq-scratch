@@ -30,25 +30,21 @@ static const int WORKER_READY = 123;
 class Client {
 public:    
     Client(int id, const std::string& text) : 
-        id_(id), text_(text), context_(nullptr), socket_(nullptr),
-        buffer_(0x100, 0) {
-        
-                                       
-    }
+        id_(id), text_(text) {}
     void operator()() const {
         //initilize context and set REQ identifier to id
-        context_ = zmq_ctx_new();
-        socket_ = zmq_socket(context_, ZMQ_REQ);
-        zmq_setsockopt(socket_, ZMQ_IDENTITY, &id_, sizeof(id_));
-        zmq_connect(socket_, FRONTEND_URI);
-        buffer_ = std::vector< char >(text_.begin(), 
-                                      text_.end());
-        buffer_.push_back(char(0)); 
+        void* context = zmq_ctx_new();
+        void* socket = zmq_socket(context, ZMQ_REQ);
+        zmq_setsockopt(socket, ZMQ_IDENTITY, &id_, sizeof(id_));
+        zmq_connect(socket, FRONTEND_URI);
+        std::vector< char > buffer = std::vector< char >(text_.begin(), 
+                                                        text_.end());
+        buffer.push_back(char(0)); 
         
-        int rc = zmq_send(socket_, &buffer_[0], text_.length(), 0);
-        rc = zmq_recv(socket_, &buffer_[0], buffer_.size(), 0);
-        buffer_[rc] = char(0);
-        printf("%d: %s -> %s\n", id_, text_.c_str(), &buffer_[0]);  
+        int rc = zmq_send(socket, &buffer[0], text_.length(), 0);
+        rc = zmq_recv(socket, &buffer[0], buffer.size(), 0);
+        buffer[rc] = char(0);
+        printf("%d: %s -> %s\n", id_, text_.c_str(), &buffer[0]);  
     }
 private:
     int id_;
@@ -61,48 +57,35 @@ private:
 class Worker {
 public:    
     Worker(int id) : 
-        id_(id), context_(nullptr), socket_(nullptr),
-        buffer_(0x100, 0), started_(false) {
-        //initilize context and set REQ identifier to id
-        
-    }
+        id_(id) {}
     void operator()() const {
-        started_ = true;
-        context_ = zmq_ctx_new();
-        socket_ = zmq_socket(context_, ZMQ_REQ);
-        zmq_setsockopt(socket_, ZMQ_IDENTITY, &id_, sizeof(id_));
-        zmq_connect(socket_, BACKEND_URI);
-        zmq_send(socket_, &WORKER_READY, sizeof(WORKER_READY), 0);
+        void* context = zmq_ctx_new();
+        void* socket = zmq_socket(context, ZMQ_REQ);
+        std::vector< char > buffer(0x100, char(0));
+        zmq_setsockopt(socket, ZMQ_IDENTITY, &id_, sizeof(id_));
+        zmq_connect(socket, BACKEND_URI);
+        zmq_send(socket, &WORKER_READY, sizeof(WORKER_READY), 0);
         int client_id = -1;
         int rc = -1;
-        started_ = true;
         while(true) {
-            zmq_recv(socket_, &client_id, sizeof(client_id), 0);
-            rc = zmq_recv(socket_, 0, 0, 0);
+            zmq_recv(socket, &client_id, sizeof(client_id), 0);
+            rc = zmq_recv(socket, 0, 0, 0);
             //assert(rc == 0);
-            rc = zmq_recv(socket_, &buffer_[0], buffer_.size(), 0);
-            buffer_[rc] = char(0);
-            const std::string txt(&buffer_[0]);
-            std::copy(txt.rbegin(), txt.rend(), buffer_.begin());
-            zmq_send(socket_, &client_id, sizeof(client_id), ZMQ_SNDMORE);
-            zmq_send(socket_, 0, 0, ZMQ_SNDMORE);
-            zmq_send(socket_, &buffer_[0], txt.size(), 0);
+            rc = zmq_recv(socket, &buffer[0], buffer.size(), 0);
+            buffer[rc] = char(0);
+            const std::string txt(&buffer[0]);
+            std::copy(txt.rbegin(), txt.rend(), buffer.begin());
+            zmq_send(socket, &client_id, sizeof(client_id), ZMQ_SNDMORE);
+            zmq_send(socket, 0, 0, ZMQ_SNDMORE);
+            zmq_send(socket, &buffer[0], txt.size(), 0);
         }
-    }
-    ~Worker() {
-        if(started_) {
-            zmq_close(socket_);
-            zmq_ctx_destroy(context_);
-        }
+        zmq_close(socket);
+        zmq_ctx_destroy(context);
     }
 private:
     int id_;
-    mutable void* context_;
-    mutable void* socket_;
-    mutable std::vector< char > buffer_;
-    mutable bool started_;
+  
 };
-
 //------------------------------------------------------------------------------
 void quiet_termination() { exit(0); }
 

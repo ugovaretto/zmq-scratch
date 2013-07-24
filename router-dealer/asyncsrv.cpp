@@ -12,6 +12,7 @@
 #include <vector>
 #include <string>
 #include <sstream>
+#include <random>
 #ifdef __APPLE__
 #include <ZeroMQ/zmq.h>
 #else
@@ -101,6 +102,8 @@ void server_worker(void* ctx) {
     std::vector< char > id(0x100, char(0));
     std::vector< char > buffer(0x100, char(0));
     std::ostringstream oss;
+    std::default_random_engine rng(std::random_device{}()); 
+    std::uniform_int_distribution<int> dist(1, 5);  
     while(true) {
         // The ROUTER socket connected to the DEALER socket gives us the
         // reply envelope and message
@@ -108,7 +111,7 @@ void server_worker(void* ctx) {
         id[idrc] = '\0';
         const int rc = zmq_recv(worker, &buffer[0], buffer.size(), 0);
         buffer[rc] = '\0';
-        const int replies = 2;//= randof (5);
+        const int replies = dist(rng);
         for (int reply = 0; reply < replies; reply++) {
             //  Sleep for some fraction of a second
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
