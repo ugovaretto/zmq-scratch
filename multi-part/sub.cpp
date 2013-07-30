@@ -17,21 +17,7 @@
 #include <zmq.h>
 #endif
 
-typedef pid_t PID;
-
-//------------------------------------------------------------------------------
-void processdata(const unsigned char* data, size_t len) {
-    PID pid;
-    size_t datalength;
-    memcpy(&pid, data, sizeof(pid));
-    data += sizeof(pid);
-    memcpy(&datalength, data, sizeof(datalength));
-    data += sizeof(datalength);
-    //do not assume string is zero-terminated
-    std::vector<char> databuf(datalength + 1, 0);
-    memcpy(&databuf[0], data, datalength);
-    std::cout << "PID: " << pid << ": " << &databuf[0] << std::endl;
-}
+typedef int PID;
 
 //------------------------------------------------------------------------------
 int main(int argc, char** argv) {
@@ -55,10 +41,15 @@ int main(int argc, char** argv) {
                  : zmq_setsockopt(publisher, ZMQ_SUBSCRIBE, "", 0); 
     assert(rc == 0);
     unsigned char buffer[0x100];
+    int p = -1;
     while(1) {
-        rc = zmq_recv(publisher, buffer, 0x100, 0);
+        rc = zmq_recv(publisher, &p, sizeof(p), 0);
         assert(rc > 0);
-        processdata(buffer, rc);
+        std::cout << p << std::endl;
+        rc = zmq_recv(publisher, &buffer[0], 0x100, 0);
+        buffer[rc] = '\0';
+        std::cout << buffer << std::endl;
+        //break;
     }
     rc = zmq_close(publisher);
     assert(rc == 0);
