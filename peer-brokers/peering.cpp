@@ -1,13 +1,15 @@
 //  Broker peering simulation (part 3)
 //  Prototypes the full flow of status and tasks
+#ifdef __APPLE__
+#include <ZeroMQ/zmq.h>
+#else
+#include <zmq.h>
+#endif
 
-#include "czmq.h"
-#define NBR_CLIENTS 10
-#define NBR_WORKERS 5
-#define WORKER_READY   "\001"      //  Signals worker is ready
+
 
 //  Our own name; in practice, this would be configured per node
-static char *self;
+static std::string self;
 
 //  .split client task
 //  This is the client task. It issues a burst of requests and then
@@ -15,6 +17,82 @@ static char *self;
 //  a number of clients are active at once, the local workers should
 //  be overloaded. The client uses a REQ socket for requests and also
 //  pushes statistics to the monitor socket:
+
+#ifdef zerorecv
+#error "zerocv already defined"
+#else
+#define zerorecv(s) assert(zmq_recv(s, 0, 0, 0) == 0)
+#endif
+
+#ifdef zerosend
+#error "zerosend already defined"
+#else
+#define zerosend(s) assert(zmq_send(s, 0, 0, ZMQ_SNDMORE) == 0)
+#endif
+
+
+//------------------------------------------------------------------------------
+class Client {
+public:    
+    Client(int id, const std::string& text) : 
+        id_(id), text_(text) {}
+    void operator()() const {
+        //initilize context and set REQ identifier to id
+        void* context = zmq_ctx_new();
+        void* socket = zmq_socket(context, ZMQ_REQ);
+        zmq_setsockopt(socket, ZMQ_IDENTITY, &id_, sizeof(id_));
+        zmq_connect(socket, FRONTEND_URI);
+        std::vector< char > buffer = std::vector< char >(text_.begin(), 
+                                                        text_.end());
+        buffer.push_back(char(0)); 
+        
+        int rc = zmq_send(socket, &buffer[0], text_.length(), 0);
+        rc = zmq_recv(socket, &buffer[0], buffer.size(), 0);
+        buffer[rc] = char(0);
+        printf("%d: %s -> %s\n", id_, text_.c_str(), &buffer[0]);  
+    }
+private:
+    int id_;
+    std::string text_;
+    mutable void* context_;
+    mutable void* socket_;
+    mutable std::vector< char > buffer_;
+};
+
+//------------------------------------------------------------------------------
+class Worker {
+public:    
+    Worker(int id) : 
+        id_(id) {}
+    void operator()() const {
+        void* context = zmq_ctx_new();
+        void* socket = zmq_socket(context, ZMQ_REQ);
+        std::vector< char > buffer(0x100, char(0));
+        zmq_setsockopt(socket, ZMQ_IDENTITY, &id_, sizeof(id_));
+        zmq_connect(socket, BACKEND_URI);
+        zmq_send(socket, &WORKER_READY, sizeof(WORKER_READY), 0);
+        int client_id = -1;
+        int rc = -1;
+        while(true) {
+            zmq_recv(socket, &client_id, sizeof(client_id), 0);
+            rc = zmq_recv(socket, 0, 0, 0);
+            //assert(rc == 0);
+            rc = zmq_recv(socket, &buffer[0], buffer.size(), 0);
+            buffer[rc] = char(0);
+            const std::string txt(&buffer[0]);
+            std::copy(txt.rbegin(), txt.rend(), buffer.begin());
+            zmq_send(socket, &client_id, sizeof(client_id), ZMQ_SNDMORE);
+            zmq_send(socket, 0, 0, ZMQ_SNDMORE);
+            zmq_send(socket, &buffer[0], txt.size(), 0);
+        }
+        zmq_close(socket);
+        zmq_ctx_destroy(context);
+    }
+private:
+    int id_;
+  
+};
+
 
 static void *
 client_task (void *args)
@@ -105,9 +183,11 @@ int main (int argc, char *argv [])
     //  First argument is this broker's name
     //  Other arguments are our peers' names
     if (argc < 2) {
-        printf ("syntax: peering me {you}...\n");
+        std::cout << "syntax: " << argv[0] << " me {you}...\n";
         return 0;
     }
+    const int NBR_CLIENTS = 10;
+    const int NBR_WORKERS = 5;
     self = argv [1];
     std::cout << "I: preparing broker at " << self << std::endl;
     
@@ -172,26 +252,29 @@ int main (int argc, char *argv [])
     Threads workers;
     int worker_nbr = 0;
     for(worker_nbr = 0; worker_nbr < NBR_WORKERS; worker_nbr++)
-        workers.push_back(std::thread(worker_task));
+        workers.push_back(std::thread(Worker(worker_nbr + 1)));
 
     //  Start local clients
     Threads clients;
     int client_nbr = 0;
     for (client_nbr = 0; client_nbr < NBR_CLIENTS; client_nbr++)
-        clients.push_back(std::thread(client_task);
+        clients.push_back(std::thread(Client(client_nbr + 1)));
 
     //  Queue of available workers
     int local_capacity = 0;
     int cloud_capacity = 0;
-    zlist_t *workers = zlist_new ();
-//////////////////////////!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!1
-
+    typedef int SocketID; 
+    std::dequeue< SocketID > worker_queue; 
+    enum {LOCAL_BE = 0,
+          CLOUD_BE = 1,
+          STATE_FE = 2,
+          MONITOR  = 3};
     //  .split main loop
     //  The main loop has two parts. First, we poll workers and our two service
     //  sockets (statefe and monitor), in any case. If we have no ready workers,
     //  then there's no point in looking at incoming requests. These can remain 
     //  on their internal 0MQ queues:
-
+    const int WORKER_READY = 0;
     while (true) {
         zmq_pollitem_t primary [] = {
             { localbe, 0, ZMQ_POLLIN, 0 },
@@ -201,36 +284,43 @@ int main (int argc, char *argv [])
         };
         //  If we have no workers ready, wait indefinitely
         int rc = zmq_poll (primary, 4,
-            local_capacity? 1000 * ZMQ_POLL_MSEC: -1);
+            worker_queue.size() != 0 ? 1000: -1);
         if (rc == -1)
             break;              //  Interrupted
 
         //  Track if capacity changes during this iteration
-        int previous = local_capacity;
-        zmsg_t *msg = NULL;     //  Reply from local worker
+        int previous = int(worker_queue.size());
+        std::vector< char > msg(0x100, char(0));
+        SocketID workerID;
+        SocketID clientID;
+        int msgSize = -1;
 
-        if (primary [0].revents & ZMQ_POLLIN) {
-            msg = zmsg_recv (localbe);
-            if (!msg)
-                break;          //  Interrupted
-            zframe_t *identity = zmsg_unwrap (msg);
-            zlist_append (workers, identity);
-            local_capacity++;
-
-            //  If it's READY, don't route the message any further
-            zframe_t *frame = zmsg_first (msg);
-            if (memcmp (zframe_data (frame), WORKER_READY, 1) == 0)
-                zmsg_destroy (&msg);
-        }
-        //  Or handle reply from peer broker
-        else
-        if (primary [1].revents & ZMQ_POLLIN) {
-            msg = zmsg_recv (cloudbe);
-            if (!msg)
-                break;          //  Interrupted
-            //  We don't use peer broker identity for anything
-            zframe_t *identity = zmsg_unwrap (msg);
-            zframe_destroy (&identity);
+        if(primary[LOCAL_BE].revents & ZMQ_POLLIN) {
+            rc = zmq_recv(localbe, &workerID, sizeof(workerID), 0);
+            if(rc == -1)
+                break;
+            zerorecv(localbe);
+            rc = zmq_recv(localbe, &clientID, sizeof(clientID), 0);
+            if(rc == -1)
+                break;
+            worker_queue.push_back(workerID);
+            if(clientID != WORKER_READY) {
+                zerorecv(localbe);
+                rc = zmq_recv(localbe, &msg[0], msg.size(), 0);
+                msgSize = rc;
+            }
+        // Or handle reply from peer broker
+        } else if (primary[CLOUD_BE].revents & ZMQ_POLLIN) {
+            //cloud id
+            rc = zmq_recv(cloudbe, &msg[0], msg.size(), 0);
+            if(rc == -1)
+                break;
+            assert(rc > 0);
+            rc = zmq_recv(cloudbe, &clientID, sizeof(clientID), 0); 
+            rc = zmq_recv(cloudbe, &msg[0], msg.size(), 0);
+            if(rc == -1)
+                break;
+            msgSize = rc;
         }
         //  Route reply to cloud if it's addressed to a broker
         for (argn = 2; msg && argn < argc; argn++) {
