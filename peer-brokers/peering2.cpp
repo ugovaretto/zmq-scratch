@@ -23,6 +23,7 @@
 #define NBR_CLIENTS 10
 #define NBR_WORKERS 3
 #define WORKER_READY   "\001"      //  Signals worker is ready
+
 //------------------------------------------------------------------------------
 std::string make_id(const std::string& id, int num) {
     std::ostringstream oss;
@@ -30,8 +31,9 @@ std::string make_id(const std::string& id, int num) {
     return oss.str();
 }
 //------------------------------------------------------------------------------
-void client_task(const std::string& id, int num)
-{
+void client_task(const std::string& id, //identity of peer attached through
+                                        //local frontend
+                 int num) { //client number
     void* context = zmq_ctx_new();
     void* client  = zmq_socket(context, ZMQ_REQ);
     const std::string identity(make_id(id, num));
@@ -51,8 +53,9 @@ void client_task(const std::string& id, int num)
     zmq_ctx_destroy(context);
 }
 //------------------------------------------------------------------------------
-void worker_task(const std::string& id, int num)
-{
+void worker_task(const std::string& id, //identity of peer attached through
+                                        //local back end
+                   int num) { //worker number
     void* ctx = zmq_ctx_new();
     void* worker = zmq_socket(ctx, ZMQ_REQ);
     zmq_connect(worker, id.c_str());
@@ -79,7 +82,7 @@ void worker_task(const std::string& id, int num)
     zmq_ctx_destroy(ctx);
 }
 //------------------------------------------------------------------------------
-bool is_peer_name(char* id, char** argv, int sz) {
+bool is_peer_name(const char* id, char** argv, int sz) {
     for(int i = 0; i != sz; ++i) {
         if(strcmp(id, argv[i]) == 0) return true;
     }
@@ -90,11 +93,11 @@ int main (int argc, char *argv []) {
     //  First argument is this broker's name
     //  Other arguments are our peers' names
     //
-    if (argc < 2) {
+    if(argc < 2) {
         printf ("syntax: peering me {you}...\n");
         return 0;
     }
-    const std::string self = argv [1];
+    const std::string self = argv[1];
     std::cout << "I: preparing broker at " << self << std::endl;
     void* ctx = zmq_ctx_new();
 
@@ -127,14 +130,14 @@ int main (int argc, char *argv []) {
     FutureArray clients;
     FutureArray workers;
     //  Start local workers
-    for(int worker_nbr = 0; worker_nbr < NBR_WORKERS; worker_nbr++)
+    for(int worker_nbr = 0; worker_nbr != NBR_WORKERS; ++worker_nbr)
         workers.push_back(
             std::move(
                 std::async(std::launch::async,
                            worker_task, self, worker_nbr + 1)));
 
    
-    for(int client_nbr = 0; client_nbr < NBR_CLIENTS; client_nbr++)
+    for(int client_nbr = 0; client_nbr != NBR_CLIENTS; ++client_nbr)
          clients.push_back(
             std::move(
                 std::async(std::launch::async,
@@ -146,7 +149,7 @@ int main (int argc, char *argv []) {
     //  or more workers available.
 
     std::deque< std::string > worker_queue;
-
+    enum {ID, DATA};
     while (true) {
         //  First, route any waiting replies from workers
         zmq_pollitem_t backends [] = {
@@ -159,50 +162,38 @@ int main (int argc, char *argv []) {
         if (rc == -1)
             break;              //  Interrupted
 
-        //  Handle reply from local worker
         std::vector< char > msg(0x200);
-        std::vector< std::vector< char > > msgs;
+        CharArrays msgs;
         void* dest_socket = 0;
-        void* source_socket = 0;
-        std::string dest_id;
+        //  Handle reply from local worker
         if(backends[0].revents & ZMQ_POLLIN) {
             //recv ID
-            rc = zmq_recv(localbe, &msg, msg.size(), 0);
-            if (rc < 0)
+            msgs = std::move(recv_messages(localbe));
+            //  Interrupted
+            if(msgs.size() == 0)
                 break;
-            msg[rc] = '\0'; //  Interrupted
-            if(std::string(&msg[0]) == WORKER_READY) {
-                worker_queue.push_back(std::string(&msg[0]));
+            if(std::equal(msgs[ID].begin(), msgs[ID].end(), WORKER_READY)) {
+                worker_queue.push_back(std::string(msgs[ID].begin(),  
+                                                   msgs[ID].end()));
             } else {
-                //dest id
-                rc = zmq_recv(localbe, &msg[0], msg.size(), 0);
-                msg[rc] = '\0';
-                dest_id = &msg[0];
-                source_socket = localbe;
-                if(is_peer_name(&msg[0], argv + 2, argc - 2)) {
+                if(is_peer_name(chars_to_string(msgs[DATA + ID]).c_str(),
+                                argv + 2, argc - 2)) {
                     dest_socket = cloudfe;
                 } else {   
                     dest_socket = localfe;
                 }
-            }
-        }  //  Or handle reply from peer broker
-        else if(backends [1].revents & ZMQ_POLLIN) {
-            //back end id - discard
-            rc = zmq_recv(cloudbe, &msg, msg.size(), 0);
-            //destination id
-            rc = zmq_recv(cloudbe, &msg, msg.size(), 0);
-            dest_id = &msg[0];
-            source_socket = cloudbe;
+            } //  Or handle reply from peer broker
+        }  else if(backends[1].revents & ZMQ_POLLIN) {
             if(is_peer_name(&msg[0], argv + 2, argc - 2)) {
                 dest_socket = cloudfe;
             } else {   
                 dest_socket = localfe;
             }
         }
-        if(source_socket != 0) msgs = std::move(recv_messages(source_socket));
         //  Route reply to client if we still need to
         if(msgs.size())
-            send_messages(dest_socket, msgs);
+            send_messages(dest_socket, CharArrays(msgs.begin() + DATA + ID,
+                                                  msgs.end()));
 
         //  .split route client requests
         //  Now we route as many client requests as we have worker capacity
@@ -220,16 +211,18 @@ int main (int argc, char *argv []) {
             int reroutable = 0;
             //  We'll do peer brokers first, to prevent starvation
             if (frontends[1].revents & ZMQ_POLLIN) {
-                msgs = recv_messages(cloudfe);
+                msgs = std::move(recv_messages(cloudfe));
                 reroutable = 0;
             }
             else if (frontends [0].revents & ZMQ_POLLIN) {
-                msgs = recv_messages(localfe);
+                msgs = std::move(recv_messages(localfe));
                 reroutable = 1;
             }
             else
                 break;      //  No work, go back to backends
-
+            
+            //message is re-routable if received from local fe
+ 
             //  If reroutable, send to cloud 20% of the time
             //  Here we'd normally use cloud status information
             //
@@ -237,12 +230,17 @@ int main (int argc, char *argv []) {
                 //  Route to random broker peer
                 int peer = 1;//randof (argc - 2) + 2;
                 zmq_send(cloudbe, argv[peer], strlen(argv[peer]), ZMQ_SNDMORE);
+                msgs.push_front(std::vector< char >(argv[peer], 
+                                            argv[peer] + strlen(argv[peer])));
                 send_messages(cloudbe, msgs);
             }
             else {
                 std::string worker = std::move(worker_queue.front());
                 worker_queue.pop_front();
-                zmq_send(localbe, worker.c_str(), worker.size(), ZMQ_SNDMORE);
+                msgs.push_front(std::vector< char >()); //SENDING TO REQ, 
+                                                        //wrap with empty data
+                msgs.push_front(std::vector< char >(worker.begin(), 
+                                                    worker.end()));
                 send_messages(localbe, msgs);
             }
         }

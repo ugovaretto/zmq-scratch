@@ -3,14 +3,15 @@
 //Author: Ugo Varetto
 #include <vector>
 #include <algorithm>
+typedef std::vector< std::vector< char > > CharArrays;
 //------------------------------------------------------------------------------
-inline std::vector< std::vector< char > >
+inline CharArrays
 recv_messages(void* socket) {
     int rc = -1;
     bool finished = false;
     int opt = 0;
     size_t len = sizeof(opt);
-    std::vector< std::vector< char > > ret;
+    CharArrays ret;
     std::vector< char > buffer(0x100);
     rc = zmq_recv(socket, &buffer[0], buffer.size(), 0);
     if(rc < 0) return ret;
@@ -34,7 +35,7 @@ recv_messages(void* socket) {
 }
 //------------------------------------------------------------------------------
 inline void send_messages(void* socket,
-              const std::vector< std::vector< char > >& msgs) {
+              const CharArrays& msgs) {
    std::for_each(msgs.begin(), --msgs.end(), 
                 [socket](const std::vector< char >& msg){
        const int rc = zmq_send(socket, &msg[0], msg.size(), ZMQ_SNDMORE);
@@ -43,3 +44,10 @@ inline void send_messages(void* socket,
    const int rc = zmq_send(socket, &(msgs.back()[0]), msgs.back().size(), 0);
    assert(rc == msgs.back().size());
 }
+//------------------------------------------------------------------------------
+std::string chars_to_string(const std::vector< char >& buf) {
+    return std::string(&(*buf.begin()), &(*buf.end()));
+}
+
+
+
