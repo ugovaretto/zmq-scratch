@@ -1,4 +1,6 @@
 #pragma once
+//Send/receive multipart messages as array of char arrays
+//Author: Ugo Varetto
 #include <vector>
 #include <algorithm>
 //------------------------------------------------------------------------------

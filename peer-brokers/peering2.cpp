@@ -18,38 +18,11 @@
 #include <zmq.h>
 #endif
 
+#include <multipart.h>
+
 #define NBR_CLIENTS 10
 #define NBR_WORKERS 3
 #define WORKER_READY   "\001"      //  Signals worker is ready
-//------------------------------------------------------------------------------
-std::vector< std::vector< char > >
-recv_messages(void* socket) {
-    int rc = -1;
-    bool finished = false;
-    int64_t opt = 0;
-    size_t len = 0;
-    std::vector< std::vector< char > > ret;
-    std::vector< char > buffer(0x100);
-    while(!finished) {
-        zmq_getsockopt(socket, ZMQ_RCVMORE, &opt, &len);
-        if(opt) {
-            rc = zmq_recv(socket, &buffer[0], buffer.size(), 0);
-            if(rc < 0) break;
-            buffer.resize(rc);
-            ret.push_back(buffer);
-        } else finished = true;
-    }
-   return ret;
-}
-//------------------------------------------------------------------------------
-void send_messages(void* socket,
-              const std::vector< std::vector< char > >& msgs) {
-   std::for_each(msgs.begin(), --msgs.end(), 
-                [socket](const std::vector< char >& msg){
-       zmq_send(socket, &msg[0], msg.size(), ZMQ_SNDMORE);  
-   });
-   zmq_send(socket, &(msgs.back()[0]), msgs.back().size(), 0);
-}
 //------------------------------------------------------------------------------
 std::string make_id(const std::string& id, int num) {
     std::ostringstream oss;

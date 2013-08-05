@@ -18,7 +18,7 @@
 #include <zmq.h>
 #endif
 
-#include "send-recv.h"
+#include <multipart.h>
 
 typedef int PID;
 
