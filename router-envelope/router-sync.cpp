@@ -1,7 +1,12 @@
 //ROUTER-ROUTER communication
 //Author: Ugo Varetto
-//start server: >a.out server, then client >a.out
-//server waits for 10s before sending messages
+//with tcp sockets:
+// start client (a.out) and server (a.out server) in any order
+//with ipc (on MacOS, not sure about other OSs at this time):
+// start server then client
+//server waits on sync socket
+//client notifies server when ready
+//For IPC on MacOS an additional send-recv step is required at the end
 //SERVER: send destination id + message
 //CLIENT: receive server id + message
 #include <cassert>
@@ -23,6 +28,8 @@ const char* uri = "ipc://router.ipc";
 const char* syncURI = "tcp://0.0.0.0:7777";
 const char* uri = "tcp://0.0.0.0:8888";
 #endif
+
+//------------------------------------------------------------------------------
 void WaitOn(void* socket) {
     assert(zmq_recv(socket, 0, 0, 0) == 0);
     assert(zmq_send(socket, 0, 0, 0) == 0);
@@ -56,8 +63,7 @@ void Server() {
 #else //WARNING: MacOS X 10.8.4: when using IPC the following line
       //or anything that prints to stdout causes client and server to hang
     std::cout << "Sent " << "'" << msg << "'" << std::endl;
-#endif         
-    printf("$\n");
+#endif   
     assert(zmq_close(socket) == 0);
     assert(zmq_close(syncSocket) == 0);
     assert(zmq_ctx_destroy(ctx) == 0); 
