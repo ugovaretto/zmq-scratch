@@ -133,18 +133,19 @@ int main (int argc, char *argv []) {
     void* ready_socket_rep = zmq_socket(ctx, ZMQ_REP);
     assert(ready_socket_rep);
     assert(zmq_bind(ready_socket_rep, ready_URI.c_str()) == 0);
-    void* ready_socket_req = zmq_socket(ctx, ZMQ_REQ);
-    assert(ready_socket_req);
+    std::vector< void* > ready_sockets;
     for(int argn = 2; argn < argc; argn++) {
         std::string peer = argv[argn];
         std::cout << "I: connecting to cloud frontend at '" 
                   << peer << "'\n";
         assert(zmq_connect(cloudbe, ("ipc://" + peer + "-cloud.ipc").c_str())
                == 0);
+        void* ready_socket_req = zmq_socket(ctx, ZMQ_REQ);
+        assert(ready_socket_req);
         //assert(zmq_setsockopt(ready, ZMQ_SUBSCRIBE, "", 0) == 0);
         assert(zmq_connect(ready_socket_req, 
                ("ipc://" + peer + "-cloud-ready.ipc").c_str()) == 0);
-        //ready_sockets.push_back(ready);
+        ready_sockets.push_back(ready_socket_req);
     }
     //  Prepare local frontend and backend
     const std::string local_fe_URI = "ipc://" + self + "-localfe.ipc";
@@ -176,10 +177,26 @@ int main (int argc, char *argv []) {
             std::move(
                 std::async(std::launch::async,
                            client_task, local_fe_URI, client_nbr + 1)));
-    assert(zmq_send(ready_socket_req, 0, 0, 0) == 0);
-    for(int i = 0; i != argc - 2; ++i) {
+    //notify
+    std::for_each(ready_sockets.begin(),
+                  ready_sockets.end(),
+                  [](void* s) {
+                      assert(zmq_send(s, 0, 0, 0) == 0);
+                  });               
+    int count = argc - 2;
+    //wait for all peers to register and reply back
+    while(count) {
         assert(zmq_recv(ready_socket_rep, 0, 0, 0) == 0);
+        assert(zmq_send(ready_socket_rep, 0, 0, 0) == 0);
+        --count;
     }
+    //receive replies from all peers 
+    std::for_each(ready_sockets.begin(),
+                  ready_sockets.end(),
+                  [](void* s) {
+                      assert(zmq_recv(s, 0, 0, 0) == 0);
+                  });               
+
     //  .split request-reply handling
     //  Here, we handle the request-reply flow. We're using load-balancing
     //  to poll workers at all times, and clients only when there are one 
