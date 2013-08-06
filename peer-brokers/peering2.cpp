@@ -129,12 +129,22 @@ int main (int argc, char *argv []) {
     assert(cloudbe);
     assert(zmq_setsockopt(cloudbe, ZMQ_IDENTITY, self.c_str(), self.size())
            == 0);
+    const std::string ready_URI = "ipc://" + self + "-cloud-ready.ipc";
+    void* ready_socket_rep = zmq_socket(ctx, ZMQ_REP);
+    assert(ready_socket_rep);
+    assert(zmq_bind(ready_socket_rep, ready_URI.c_str()) == 0);
+    void* ready_socket_req = zmq_socket(ctx, ZMQ_REQ);
+    assert(ready_socket_req);
     for(int argn = 2; argn < argc; argn++) {
         std::string peer = argv[argn];
         std::cout << "I: connecting to cloud frontend at '" 
                   << peer << "'\n";
         assert(zmq_connect(cloudbe, ("ipc://" + peer + "-cloud.ipc").c_str())
                == 0);
+        //assert(zmq_setsockopt(ready, ZMQ_SUBSCRIBE, "", 0) == 0);
+        assert(zmq_connect(ready_socket_req, 
+               ("ipc://" + peer + "-cloud-ready.ipc").c_str()) == 0);
+        //ready_sockets.push_back(ready);
     }
     //  Prepare local frontend and backend
     const std::string local_fe_URI = "ipc://" + self + "-localfe.ipc";
@@ -166,8 +176,10 @@ int main (int argc, char *argv []) {
             std::move(
                 std::async(std::launch::async,
                            client_task, local_fe_URI, client_nbr + 1)));
-
-    sleep(5);
+    assert(zmq_send(ready_socket_req, 0, 0, 0) == 0);
+    for(int i = 0; i != argc - 2; ++i) {
+        assert(zmq_recv(ready_socket_rep, 0, 0, 0) == 0);
+    }
     //  .split request-reply handling
     //  Here, we handle the request-reply flow. We're using load-balancing
     //  to poll workers at all times, and clients only when there are one 
@@ -180,7 +192,15 @@ int main (int argc, char *argv []) {
           REQ_SOCKET_EMPTY_OFFSET = 0,
           REQ_SOCKET_DATA_OFFSET};  
     while (true) {
-        //  First, route any waiting replies from workers
+        // //when peers are restarted they will resend the ready signal
+        // //and wait for a response
+        // zmq_pollitem_t ready[] = {{ready_socket_rep, 0, ZMQ_POLLIN, 0}};
+        // zmq_poll(ready, 1, 0);
+        // if(ready[0].revents & ZMQ_POLLIN) {
+        //     assert(zmq_recv(ready_socket_rep, 0, 0, 0) == 0);
+        //     assert(zmq_send(ready_socket_req, 0, 0, 0) == 0);
+        // }
+        // First, route any waiting replies from workers
         zmq_pollitem_t backends [] = {
             { localbe, 0, ZMQ_POLLIN, 0 },
             { cloudbe, 0, ZMQ_POLLIN, 0 }
@@ -282,9 +302,9 @@ int main (int argc, char *argv []) {
             }
         }
     }
-    zmq_close(localbe);
-    zmq_close(cloudbe);
-    zmq_close(localfe);
-    zmq_close(cloudfe);
+    assert(zmq_close(localbe));
+    assert(zmq_close(cloudbe));
+    assert(zmq_close(localfe));
+    assert(zmq_close(cloudfe));
     return EXIT_SUCCESS;
 }
