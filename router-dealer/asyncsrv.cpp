@@ -138,7 +138,5 @@ int main (void)
     new std::thread(client_task);
     new std::thread(client_task);
     new std::thread(server_task);
-    std::chrono::milliseconds duration(5000);
-    std::this_thread::sleep_for(duration);
     return 0;
 }

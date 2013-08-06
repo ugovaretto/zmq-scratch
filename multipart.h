@@ -48,6 +48,10 @@ inline void send_messages(void* socket,
 std::string chars_to_string(const std::vector< char >& buf) {
     return std::string(&(*buf.begin()), &(*buf.end()));
 }
+//------------------------------------------------------------------------------
+void push_front(CharArrays& ca, const std::vector< char >& v) {
+    ca.insert(ca.begin(), v);
+}
 
 
 

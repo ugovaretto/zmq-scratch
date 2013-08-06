@@ -7,11 +7,13 @@
 #include <deque>
 #include <vector>
 #include <cstdio>
-#include <unistd.h>
+#include <chrono>
+#include <random>
 #include <cassert>
 #include <algorithm>
 #include <sstream>
 #include <cstring>
+
 #ifdef __APPLE__
 #include <ZeroMQ/zmq.h>
 #else
@@ -20,10 +22,20 @@
 
 #include <multipart.h>
 
-#define NBR_CLIENTS 10
-#define NBR_WORKERS 3
-#define WORKER_READY   "\001"      //  Signals worker is ready
+const int NBR_CLIENTS = 10;
+const int NBR_WORKERS = 3;
+const char WORKER_READY[] = "\001";      //  Signals worker is ready
 
+//------------------------------------------------------------------------------
+void sleep(int s) {
+    std::this_thread::sleep_for(std::chrono::seconds(s));
+}
+//------------------------------------------------------------------------------
+int rand(int lower, int upper) {
+    std::default_random_engine rng(std::random_device{}()); 
+    std::uniform_int_distribution<int> dist(lower, upper);
+    return dist(rng);  
+}
 //------------------------------------------------------------------------------
 std::string make_id(const std::string& id, int num) {
     std::ostringstream oss;
@@ -47,7 +59,7 @@ void client_task(const std::string& id, //identity of peer attached through
         if(rc < 0) break;
         reply[rc] = '\0';
         printf("Client: %s\n", reply);
-        sleep (1);
+        sleep(1);
     }
     zmq_close(client);
     zmq_ctx_destroy(context);
@@ -149,7 +161,8 @@ int main (int argc, char *argv []) {
     //  or more workers available.
 
     std::deque< std::string > worker_queue;
-    enum {ID, DATA};
+    //offsets of id and data in for ROUTER offsets 
+    enum {ROUTER_SOCKET_ID_OFFSET, ROUTER_SOCKET_DATA_OFFSET}; 
     while (true) {
         //  First, route any waiting replies from workers
         zmq_pollitem_t backends [] = {
@@ -161,7 +174,6 @@ int main (int argc, char *argv []) {
             worker_queue.size() ? 100: -1);
         if (rc == -1)
             break;              //  Interrupted
-
         std::vector< char > msg(0x200);
         CharArrays msgs;
         void* dest_socket = 0;
@@ -172,11 +184,18 @@ int main (int argc, char *argv []) {
             //  Interrupted
             if(msgs.size() == 0)
                 break;
-            if(std::equal(msgs[ID].begin(), msgs[ID].end(), WORKER_READY)) {
-                worker_queue.push_back(std::string(msgs[ID].begin(),  
-                                                   msgs[ID].end()));
+            //need to use std::equal instead of == operator because
+            //WORKER_READY is null terminated
+            if(std::equal(msgs[ROUTER_SOCKET_ID_OFFSET].begin(),
+                          msgs[ROUTER_SOCKET_ID_OFFSET].end(),
+                          WORKER_READY)) {
+                worker_queue.push_back(
+                    std::string(msgs[ROUTER_SOCKET_ID_OFFSET].begin(),  
+                                msgs[ROUTER_SOCKET_ID_OFFSET].end()));
             } else {
-                if(is_peer_name(chars_to_string(msgs[DATA + ID]).c_str(),
+                const int INNER_ID = ROUTER_SOCKET_ID_OFFSET
+                                     + ROUTER_SOCKET_ID_OFFSET;
+                if(is_peer_name(chars_to_string(msgs[INNER_ID]).c_str(),
                                 argv + 2, argc - 2)) {
                     dest_socket = cloudfe;
                 } else {   
@@ -191,23 +210,19 @@ int main (int argc, char *argv []) {
             }
         }
         //  Route reply to client if we still need to
-        if(msgs.size())
-            send_messages(dest_socket, CharArrays(msgs.begin() + DATA + ID,
+        if(msgs.size()) {
+            const int INNER_ID = ROUTER_SOCKET_ID_OFFSET
+                                     + ROUTER_SOCKET_ID_OFFSET;
+            send_messages(dest_socket, CharArrays(msgs.begin() + INNER_ID,
                                                   msgs.end()));
-
-        //  .split route client requests
-        //  Now we route as many client requests as we have worker capacity
-        //  for. We may reroute requests from our local frontend, but not from 
-        //  the cloud frontend. We reroute randomly now, just to test things
-        //  out. In the next version, we'll do this properly by calculating
-        //  cloud capacity:
+        }
         while(worker_queue.size()) {
             zmq_pollitem_t frontends [] = {
                 { localfe, 0, ZMQ_POLLIN, 0 },
                 { cloudfe, 0, ZMQ_POLLIN, 0 }
             };
             rc = zmq_poll (frontends, 2, 0);
-            assert (rc >= 0);
+            assert(rc >= 0);
             int reroutable = 0;
             //  We'll do peer brokers first, to prevent starvation
             if (frontends[1].revents & ZMQ_POLLIN) {
@@ -230,17 +245,19 @@ int main (int argc, char *argv []) {
                 //  Route to random broker peer
                 int peer = 1;//randof (argc - 2) + 2;
                 zmq_send(cloudbe, argv[peer], strlen(argv[peer]), ZMQ_SNDMORE);
-                msgs.push_front(std::vector< char >(argv[peer], 
-                                            argv[peer] + strlen(argv[peer])));
+                push_front(msgs,
+                           std::vector< char >(argv[peer], 
+                                               argv[peer] 
+                                               + strlen(argv[peer])));
                 send_messages(cloudbe, msgs);
             }
             else {
                 std::string worker = std::move(worker_queue.front());
                 worker_queue.pop_front();
-                msgs.push_front(std::vector< char >()); //SENDING TO REQ, 
-                                                        //wrap with empty data
-                msgs.push_front(std::vector< char >(worker.begin(), 
-                                                    worker.end()));
+                push_front(msgs, std::vector< char >()); //SENDING TO REQ, 
+                                                   //wrap with empty data
+                push_front(msgs, std::vector< char >(worker.begin(), 
+                                                     worker.end()));
                 send_messages(localbe, msgs);
             }
         }
