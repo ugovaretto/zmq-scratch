@@ -3,6 +3,9 @@
 //Author: Ugo Varetto
 #include <vector>
 #include <algorithm>
+#include <iostream>
+#include <string>
+
 typedef std::vector< std::vector< char > > CharArrays;
 //------------------------------------------------------------------------------
 inline CharArrays
@@ -15,20 +18,23 @@ recv_messages(void* socket) {
     std::vector< char > buffer(0x100);
     rc = zmq_recv(socket, &buffer[0], buffer.size(), 0);
     if(rc < 0) return ret;
-    buffer.resize(rc);
-    ret.push_back(buffer);
-    buffer.resize(0x100);
+    ret.push_back(std::move
+                   (std::vector< char >
+                      (buffer.begin(),
+                       buffer.begin() + rc)));
     while(true) {
         opt = 0;
         if(zmq_getsockopt(socket, ZMQ_RCVMORE, &opt, &len) != 0) {
-			std::cerr << zmq_strerror(errno) << std::endl;
-			return ret;
-		}
+			      std::cerr << zmq_strerror(errno) << std::endl;
+			      return ret;
+		    }
         if(opt) {
         	rc = zmq_recv(socket, &buffer[0], buffer.size(), 0);
         	if(rc < 0) break;
-            buffer.resize(rc);
-            ret.push_back(buffer);
+          ret.push_back(std::move
+                         (std::vector< char >
+                            (buffer.begin(),
+                             buffer.begin() + rc)));
         } else break;
     }
    return ret;
@@ -52,6 +58,16 @@ std::string chars_to_string(const std::vector< char >& buf) {
 void push_front(CharArrays& ca, const std::vector< char >& v) {
     ca.insert(ca.begin(), v);
 }
-
-
+//------------------------------------------------------------------------------
+std::ostream& operator<<(std::ostream& os, const CharArrays& ca) {
+    std::for_each(ca.begin(), ca.end(),
+            [&os](const std::vector< char >& msg) {
+                if(msg.size() == 0) os << "> <EMPTY>\n";
+                else {
+                    const std::string str(msg.begin(), msg.end());
+                    os << "> " << str << "\n";
+                }
+            });
+    return os;
+}
 
