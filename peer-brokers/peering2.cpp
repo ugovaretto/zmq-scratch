@@ -22,7 +22,7 @@
 
 #include <multipart.h>
 
-const int NBR_CLIENTS = 5;
+const int NBR_CLIENTS = 10;
 const int NBR_WORKERS = 3;
 const char WORKER_READY[] = "--READY";      //  Signals worker is ready
 
@@ -82,7 +82,7 @@ void worker_task(const std::string& id, //identity of peer attached through
     CharArrays msgs;
     //  Process messages as they arrive
     std::ostringstream oss;
-    oss << "Hi from server " << num;
+    oss << "Hi from server " << num << " @ " << identity;
     const std::string msg = oss.str();
     while (true) {
         msgs = std::move(recv_messages(worker));
@@ -264,7 +264,7 @@ int main (int argc, char *argv []) {
             //
             if (reroutable && argc > 2 && rand(1, 5) == 1) {
                 //  Route to random broker peer
-                const int peer = rand(2, 4 * (argc - 1));
+                const int peer = rand(2, argc - 1); 
                 push_front(msgs,
                            std::vector< char >(argv[peer], 
                                                argv[peer] 
