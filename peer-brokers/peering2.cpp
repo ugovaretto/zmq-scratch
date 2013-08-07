@@ -1,5 +1,31 @@
-//  Broker peering simulation (part 2)
-//  Prototypes the request-reply flow
+//---------------------
+// Multi-broker example (reworked example from ZGuide - Ch. 3) 
+//---------------------
+// Author: Ugo Varetto
+//---------------------
+// Each broker is attached to a number of "local" clients and workers through
+// REQ, REP sockets as well as other peer brokers through ROUTER sockets.
+// "local" in this case means that the clients and workers are started as 
+// separate threads by the process that runs the broker
+// Data flow:
+// - client send data to local front-end
+// - broker receives data from through local and peer front-ends
+// - if all local workers are busy data is routed to peer-brokers through
+//   cloud back-end, if not it is routed to local backend   
+//
+// Initialization:
+// Each broker creates ang binds the required sockets then connects
+// the backend to each other peer's frontend.
+//
+// To make sure all peers are available to exchange messages an handshaking
+// process takes pace after initialization:
+// 1. broker sends READY signal to all other peers on a REQ socket
+// 2. broker receives on a REP socket a number of notification messages equal to
+//    the number of peers - 1 (itself), and replies to each message with an ACK
+// 3. broker receives ACK from each peer on the REQ socket that started the
+//    handshaking process
+//
+// run in separate terminals as e.g. peer 1 2 3, peer 2 3 1, peer 3 1 2
 
 #include <iostream>
 #include <string>
@@ -53,14 +79,22 @@ void client_task(const std::string& id, //identity of peer attached through
     const std::string identity(make_id(id, num));
     zmq_setsockopt(client, ZMQ_IDENTITY, identity.c_str(), identity.size());
     assert(zmq_connect(client, id.c_str()) == 0);
+    std::ostringstream oss;
     while (true) {
         //  Send request, get reply
         assert(zmq_send(client, "HELLO", strlen("HELLO"), 0) > 0);
+        auto send_time = std::chrono::steady_clock::now();
         char reply[0x100];
         const int rc = zmq_recv(client, reply, 0x100, 0);
+        auto recv_time = std::chrono::steady_clock::now();
+        auto diff = recv_time - send_time;
+        oss << std::chrono::duration_cast< 
+                    std::chrono::milliseconds >(diff).count()
+            << " ms" << std::endl; 
         if(rc < 0) break;
         reply[rc] = '\0';
-        printf("Client %d: %s\n", num, reply);
+        printf("Client %d: %s - %s\n", num, reply, oss.str().c_str());
+        oss.str("");
         sleep(1);
     }
     assert(zmq_close(client) == 0);
@@ -117,6 +151,7 @@ int main (int argc, char *argv []) {
     std::cout << "I: preparing broker at " << self << std::endl;
     void* ctx = zmq_ctx_new();
     assert(ctx);
+
     //  Bind cloud frontend to endpoint
     void* cloudfe = zmq_socket(ctx, ZMQ_ROUTER);
     assert(cloudfe);
@@ -124,29 +159,37 @@ int main (int argc, char *argv []) {
            == 0);
     assert(zmq_bind(cloudfe, ("ipc://" + self + "-cloud.ipc").c_str()) == 0);
 
-    //  Connect cloud backend to all peers
+    //  Connect cloud backend to all peers' frontends
     void* cloudbe = zmq_socket(ctx, ZMQ_ROUTER);
     assert(cloudbe);
     assert(zmq_setsockopt(cloudbe, ZMQ_IDENTITY, self.c_str(), self.size())
            == 0);
-    const std::string ready_URI = "ipc://" + self + "-cloud-ready.ipc";
-    void* ready_socket_rep = zmq_socket(ctx, ZMQ_REP);
-    assert(ready_socket_rep);
-    assert(zmq_bind(ready_socket_rep, ready_URI.c_str()) == 0);
-    std::vector< void* > ready_sockets;
     for(int argn = 2; argn < argc; argn++) {
         std::string peer = argv[argn];
         std::cout << "I: connecting to cloud frontend at '" 
                   << peer << "'\n";
         assert(zmq_connect(cloudbe, ("ipc://" + peer + "-cloud.ipc").c_str())
                == 0);
+    }
+    // Create input notification socket to receive 'ready' signals from
+    // peers and connect to each peer's notification socket to notify
+    // when ready
+    const std::string ready_URI = "ipc://" + self + "-cloud-ready.ipc";
+    void* ready_socket_rep = zmq_socket(ctx, ZMQ_REP);
+    assert(ready_socket_rep);
+    assert(zmq_bind(ready_socket_rep, ready_URI.c_str()) == 0);
+    std::vector< void* > peer_ready_sockets;
+    for(int argn = 2; argn < argc; argn++) {
+        std::string peer = argv[argn];
+        std::cout << "I: connecting to notification socket '" 
+                  << peer << "'\n"; 
         void* ready_socket_req = zmq_socket(ctx, ZMQ_REQ);
         assert(ready_socket_req);
-        //assert(zmq_setsockopt(ready, ZMQ_SUBSCRIBE, "", 0) == 0);
         assert(zmq_connect(ready_socket_req, 
                ("ipc://" + peer + "-cloud-ready.ipc").c_str()) == 0);
-        ready_sockets.push_back(ready_socket_req);
+        peer_ready_sockets.push_back(ready_socket_req);
     }
+
     //  Prepare local frontend and backend
     const std::string local_fe_URI = "ipc://" + self + "-localfe.ipc";
     const std::string local_be_URI = "ipc://" + self + "-localbe.ipc";
@@ -157,14 +200,11 @@ int main (int argc, char *argv []) {
     assert(localbe);
     assert(zmq_bind(localbe, local_be_URI.c_str()) == 0);
 
-    //  Get user to tell us when we can start...
-    //std::cout << "Press Enter when all brokers are started" << std::endl;
-    //const int ready = std::cin.get();
-
+    // Start workers and clients
     typedef std::vector< std::future< void > > FutureArray;
     FutureArray clients;
     FutureArray workers;
-    //  Start local workers
+
     for(int worker_nbr = 0; worker_nbr != NBR_WORKERS; ++worker_nbr)
         workers.push_back(
             std::move(
@@ -177,24 +217,33 @@ int main (int argc, char *argv []) {
             std::move(
                 std::async(std::launch::async,
                            client_task, local_fe_URI, client_nbr + 1)));
-    //notify
-    std::for_each(ready_sockets.begin(),
-                  ready_sockets.end(),
+    
+    // To make sure all peers are started a REQ socket is used to notify
+    // and a REP socket to receive notifications
+    // Notify other peers we are ready
+    std::for_each(peer_ready_sockets.begin(),
+                  peer_ready_sockets.end(),
                   [](void* s) {
-                      assert(zmq_send(s, 0, 0, 0) == 0);
+                      assert(zmq_send(s, 0, 0, 0) == 0); // send NOTIFY
                   });               
+    // Wait for each other peer to notify and reply back
     int count = argc - 2;
-    //wait for all peers to register and reply back
+    //wait for all other peers to register and reply back
     while(count) {
-        assert(zmq_recv(ready_socket_rep, 0, 0, 0) == 0);
+        //receive FROM NOTIFY
+        //OTHER peer notifies
+        assert(zmq_recv(ready_socket_rep, 0, 0, 0) == 0); 
+        //reply to NOTIFY request 
         assert(zmq_send(ready_socket_rep, 0, 0, 0) == 0);
         --count;
     }
-    //receive replies from all peers 
-    std::for_each(ready_sockets.begin(),
-                  ready_sockets.end(),
+    //receive replies from all other peers 
+    std::for_each(peer_ready_sockets.begin(),
+                  peer_ready_sockets.end(),
                   [](void* s) {
-                      assert(zmq_recv(s, 0, 0, 0) == 0);
+                      // receive response to  NOTIFY
+                      // THIS peer receives notification ACK
+                      assert(zmq_recv(s, 0, 0, 0) == 0); 
                   });               
 
     //  .split request-reply handling
@@ -209,14 +258,6 @@ int main (int argc, char *argv []) {
           REQ_SOCKET_EMPTY_OFFSET = 0,
           REQ_SOCKET_DATA_OFFSET};  
     while (true) {
-        // //when peers are restarted they will resend the ready signal
-        // //and wait for a response
-        // zmq_pollitem_t ready[] = {{ready_socket_rep, 0, ZMQ_POLLIN, 0}};
-        // zmq_poll(ready, 1, 0);
-        // if(ready[0].revents & ZMQ_POLLIN) {
-        //     assert(zmq_recv(ready_socket_rep, 0, 0, 0) == 0);
-        //     assert(zmq_send(ready_socket_req, 0, 0, 0) == 0);
-        // }
         // First, route any waiting replies from workers
         zmq_pollitem_t backends [] = {
             { localbe, 0, ZMQ_POLLIN, 0 },
@@ -292,14 +333,12 @@ int main (int argc, char *argv []) {
                 reroutable = 1;
             }
             else
-                break;      //  No work, go back to backends
+                break; //  No work, go back to backends
             
             //message is re-routable if received from local fe
  
-            //  If reroutable, send to cloud 20% of the time
-            //  Here we'd normally use cloud status information
-            //
-            if (reroutable && argc > 2 && rand(1, 5) == 1) {
+            //  If reroutable, send to cloud 25% of the time
+            if (reroutable && argc > 2 && rand(1, 4) == 1) {
                 //  Route to random broker peer
                 const int peer = rand(2, argc - 1); 
                 push_front(msgs,
@@ -319,9 +358,15 @@ int main (int argc, char *argv []) {
             }
         }
     }
-    assert(zmq_close(localbe));
-    assert(zmq_close(cloudbe));
-    assert(zmq_close(localfe));
-    assert(zmq_close(cloudfe));
-    return EXIT_SUCCESS;
+    std::for_each(peer_ready_sockets.begin(),
+                  peer_ready_sockets.end(),
+                  [](void* s) {
+                    assert(zmq_close(s) == 0);  
+                  });
+    assert(zmq_close(localbe) == 0);
+    assert(zmq_close(cloudbe) == 0);
+    assert(zmq_close(localfe) == 0);
+    assert(zmq_close(cloudfe) == 0);
+    assert(zmq_ctx_destroy(ctx) == 0);
+    return 0;
 }
