@@ -15,6 +15,8 @@
 #include <cstring>
 #include <thread>
 #include <future>
+#include <algorithm>
+#include <cerrno>
 
 #ifdef __APPLE__
 #include <ZeroMQ/zmq.h>
@@ -30,15 +32,13 @@ void sleep(int s) {
 }
 
 //------------------------------------------------------------------------------
-void Worker(const char* uri) {
-
+void Worker(const char* uri, int id) {
+    assert(id != 0);
     void* ctx = zmq_ctx_new();
     assert(ctx);
     void* socket = zmq_socket(ctx, ZMQ_REQ);
     assert(socket);
-    const int LINGER_PERIOD = 0; //discard all pending messages on close
-    assert(zmq_setsockopt(socket, ZMQ_LINGER, &LINGER_PERIOD,
-                          sizeof(LINGER_PERIOD)) == 0);
+    assert(zmq_setsockopt(socket, ZMQ_IDENTITY, &id, sizeof(int)) == 0);
     assert(zmq_connect(socket, uri) == 0);
     assert(zmq_send(socket, &WORKER_READY, sizeof(WORKER_READY), 0) > 0);
     std::vector< char > buffer(0x100);
@@ -50,9 +50,15 @@ void Worker(const char* uri) {
     assert(sizeof(long int) >= 8);
     const std::chrono::duration<long int> GUARANTEED_UP_TIME =
                                                     std::chrono::seconds(15);
-    const auto start = std::chrono::steady_clock::now();                                                
+    const auto start = std::chrono::steady_clock::now();
+    //receive: |client id|<empty>|sequence id| payload|                                                
+    int clientid = -1;
     while(true) {
-        int rc = zmq_recv(socket, &sequence, sizeof(sequence), 0);
+        int rc = zmq_recv(socket, &clientid, sizeof(clientid), 0);
+        assert(rc > 0);
+        rc = zmq_recv(socket, 0, 0, 0);
+        assert(rc == 0);
+        rc = zmq_recv(socket, &sequence, sizeof(sequence), 0);
         assert(rc > 0);
         assert(sequence >= 0);
         const int buffer_size = zmq_recv(socket, &buffer[0], buffer.size(), 0);
@@ -62,14 +68,18 @@ void Worker(const char* uri) {
         if(elapsed_time > GUARANTEED_UP_TIME) {
             //10% probability of crashing
             if(dist(rng) > NINETY_PERCENT) {
-                std::cout << ">CRASHING" << std::endl;
+                std::cout << id << ">CRASHING" << std::endl;
                 break;
             //30% probabilty of server overload    
             } else if(dist(rng) <= THIRTY_PERCENT) {
-                std::cout << ">OVERLOAD" << std::endl;
+                std::cout << id << ">OVERLOAD" << std::endl;
                 sleep(3); 
             }
         }
+        rc = zmq_send(socket, &clientid, sizeof(clientid), ZMQ_SNDMORE);
+        assert(rc > 0);
+        rc = zmq_send(socket, 0, 0, ZMQ_SNDMORE);
+        assert(rc == 0);
         rc = zmq_send(socket, &sequence, sizeof(sequence), ZMQ_SNDMORE);
         assert(rc > 0);
         rc = zmq_send(socket, &buffer[0], buffer_size, 0);
@@ -96,7 +106,12 @@ int main(int argc, char** argv) {
     for(int t = 0; t != NUM_WORKERS; ++t) {
         workers.push_back(
                     std::move(
-                        std::async(std::launch::async, Worker, argv[2])));
+                        std::async(std::launch::async, Worker,
+                                   argv[2], t + 1)));
     }
+    std::for_each(workers.begin(), workers.end(),
+                 [](FutureArray::value_type& f) {
+                    f.wait();
+                 });
     return 0;
 }

@@ -2,6 +2,7 @@
 //message format; in a real-world scenario use the functions in multipart.h
 //to avoid dealing with the message format detail.
 //Author: Ugo Varetto
+//use with *lazy* pirate client and *simple* pirate worker
 
 #include <iostream>
 #include <vector>
@@ -58,7 +59,7 @@ int main(int argc, char** argv) {
     while(serviced_requests < MAX_REQUESTS) {
         zmq_pollitem_t items[] = {
             {backend, 0, ZMQ_POLLIN, 0},
-            {frontend, 0, ZMQ_POLLIN, 0}};
+            {frontend, 0, ZMQ_POLLIN, 0}};    
         rc = zmq_poll(items, worker_queue.size() > 0 ? 2 : 1, -1);
         if(rc == -1) break;
         if(items[0].revents & ZMQ_POLLIN) {
@@ -80,7 +81,7 @@ int main(int argc, char** argv) {
                 ++serviced_requests;
             } 
         }
-        if(items[1].revents & ZMQ_POLLIN) {
+        if(items[1].revents & ZMQ_POLLIN) {      
             int seq_id = -1;
             zmq_recv(frontend, &client_id, sizeof(client_id), 0);
             zmq_recv(frontend, 0, 0, 0);
