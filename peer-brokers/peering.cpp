@@ -246,7 +246,6 @@ int main (int argc, char *argv []) {
                       assert(zmq_recv(s, 0, 0, 0) == 0); 
                   });               
 
-    //  .split request-reply handling
     //  Here, we handle the request-reply flow. We're using load-balancing
     //  to poll workers at all times, and clients only when there are one 
     //  or more workers available.

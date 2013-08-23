@@ -16,15 +16,19 @@
 #endif
 
 static const int WORKER_READY = 123;
+static const int HEARBEAT = 111;
 
 typedef std::chrono::time_point< std::chrono::steady_clock > timepoint;
 
-const static std::chrono::duration<long int> EXPIRATION = 
+const static std::chrono::duration< long int > EXPIRATION_INTERVAL = 
     std::chrono::milliseconds(15 * 1000);
+const static std::chrono::duration< long int > HEARTBEAT_INTERVAL =
+    std::chrono::milliseconds(1 * 1000);    
 
+//------------------------------------------------------------------------------
 class worker_info {
     bool operator >(const worker_info& wi) const {
-        return expiry > wi.expiry;
+        return timestamp > wi.timestamp;
     }
     operator int() const { return id_; }
     worker_info(int id = -1) : 
@@ -51,17 +55,21 @@ void purge(Workers& workers, long int cutoff) {
 }
 //------------------------------------------------------------------------------
 void push(Workers& workers, int id) {
+    //if worker already present remove
+    workers.erase(std::find_if(workers.begin(),
+                               workers.end(),
+                               [id](const worker_info& wi){
+                                   return wi.id_ == id;
+                               }));
     workers.insert(worker_info(id));
 }
 //------------------------------------------------------------------------------
-int pop(const Workers& workers, long int cutoff) {
-    purge(workers, cutoff);
+int pop(const Workers& workers, long int cutoff) { 
     if(worker.size() == 0) return -1;
     const int ret = *workers.begin();
     worker.erase(workers.begin());
     return ret;
 }
-
 //------------------------------------------------------------------------------
 int main(int argc, char** argv) {
     if(argc < 3) {
@@ -91,6 +99,11 @@ int main(int argc, char** argv) {
     assert(frontend);
     void* backend = zmq_socket(context, ZMQ_ROUTER);
     assert(backend);
+    const int BACKEND_ID = 1000;
+    //since the worker is using a dealer socket it will parse
+    //both identity and empty marker
+    assert(setsockopt(socket, ZMQ_IDENTITY, 
+           &BACKEND_ID, sizeof(BACKEND_ID)) == 0);
     assert(zmq_bind(frontend, FRONTEND_URI) == 0);
     assert(zmq_bind(backend, BACKEND_URI) == 0);
 
@@ -105,12 +118,14 @@ int main(int argc, char** argv) {
     while(serviced_requests < MAX_REQUESTS) {
         zmq_pollitem_t items[] = {
             {backend, 0, ZMQ_POLLIN, 0},
-            {frontend, 0, ZMQ_POLLIN, 0}};    
+            {frontend, 0, ZMQ_POLLIN, 0}};
+        purge(workers, EXPIRATION_INTERVAL);        
         rc = zmq_poll(items, worker_queue.size() > 0 ? 2 : 1,
                       MAX_DURATION.count());
         if(rc == -1) break;
         if(items[0].revents & ZMQ_POLLIN) {
             zmq_recv(backend, &worker_id, sizeof(worker_id), 0);
+            push(workers, worker_id);
             worker_queue.push_back(worker_id);
             zmq_recv(backend, 0, 0, 0);
             zmq_recv(backend, &client_id, sizeof(client_id), 0);
@@ -144,7 +159,17 @@ int main(int argc, char** argv) {
             zmq_send(backend, &seq_id, sizeof(seq_id), ZMQ_SNDMORE);
             zmq_send(backend, &request[0], rc, 0);
             worker_queue.pop_front();
-        }     
+        }
+        std::for_each(workers.begin(),
+                      workers.end(),
+                      [backend, HEARTBEAT](const worker_info& wi) {
+                          zmq_send(backend, &wi.id,
+                                   sizeof(&wi.id), ZMQ_SNDMORE);
+                          zmq_send(backend, 0, 0, 0);
+                          zmq_send(backend, &HEARTBEAT, sizeof(HEARBEAT), 0);            
+                      });
+
+
     }
     zmq_close(frontend);
     zmq_close(backend);
