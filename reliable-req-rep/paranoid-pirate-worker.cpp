@@ -108,7 +108,7 @@ void Worker(const char* uri, int id) {
                     }
                 }
                 //specify server id (not needed for REQ sockects)
-                rc = zmq_send(socket, &serverid, sizeof(serverid, ZMQ_SNDMORE);
+                rc = zmq_send(socket, &serverid, sizeof(serverid), ZMQ_SNDMORE);
                 assert(rc > 0);
                 //send empty marker (not needed for REQ sockets)
                 rc = zmq_send(socket, 0, 0, ZMQ_SNDMORE);
@@ -135,6 +135,7 @@ void Worker(const char* uri, int id) {
                 assert(zmq_setsockopt(socket, ZMQ_LINGER,
                           &LINGER_TIME, sizeof(LINGER_TIME)));
                 assert(zmq_connect(socket, uri) == 0);
+                server_alive = MAX_LIVENESS;
             }
             //send empty marker (not needed for REQ sockets)
             rc = zmq_send(socket, &serverid, sizeof(serverid, ZMQ_SNDMORE);
