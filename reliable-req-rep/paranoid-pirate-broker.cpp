@@ -42,15 +42,16 @@ private:
 typedef std::set< worker_info, std::greater< worker_info > > Workers;  
 
 //------------------------------------------------------------------------------
-void purge(Workers& workers, long int cutoff) {
+void purge(Workers& workers,
+           const std::chrono::duration< long int >& cutoff) {
     workers.erase(std::find_if(workers.rbegin(),
                                workers.rend(),
-                               [cutoff](const worker_info& wi) { 
+                               [&cutoff](const worker_info& wi) { 
                                  return 
                                     std::chrono::duration_cast(
                                         std::chrono::steady_clock::now()
                                         - wi.timestamp
-                                        ) >= EXPIRATION;
+                                        ) >= cutoff;
                                 }), workers.rend());
 }
 //------------------------------------------------------------------------------
@@ -64,8 +65,8 @@ void push(Workers& workers, int id) {
     workers.insert(worker_info(id));
 }
 //------------------------------------------------------------------------------
-int pop(const Workers& workers, long int cutoff) { 
-    if(worker.size() == 0) return -1;
+int pop(const Workers& workers) { 
+    if(worker.size() == 0) return -1; //throw instead
     const int ret = *workers.begin();
     worker.erase(workers.begin());
     return ret;
@@ -78,7 +79,6 @@ int main(int argc, char** argv) {
                   << std::endl;
         return 0;
     }
-
     const char* FRONTEND_URI = argv[1];
     const char* BACKEND_URI  = argv[2];
     const int MAX_REQUESTS = 100;
@@ -126,7 +126,6 @@ int main(int argc, char** argv) {
         if(items[0].revents & ZMQ_POLLIN) {
             zmq_recv(backend, &worker_id, sizeof(worker_id), 0);
             push(workers, worker_id);
-            worker_queue.push_back(worker_id);
             zmq_recv(backend, 0, 0, 0);
             zmq_recv(backend, &client_id, sizeof(client_id), 0);
             if(client_id != WORKER_READY) {
@@ -149,16 +148,16 @@ int main(int argc, char** argv) {
             zmq_recv(frontend, 0, 0, 0);
             rc = zmq_recv(frontend, &seq_id, sizeof(seq_id), 0);
             assert(rc > 0);
-            rc = zmq_recv(frontend, &request[0], request.size(), 0);
-            assert(rc > 0);
-            worker_id = worker_queue.front();
+            const int req_size = zmq_recv(frontend, &request[0], request.size(), 0);
+            assert(req_size > 0);
+            worker_id = pop(workers);
+            assert(worker_id > 0);
             zmq_send(backend, &worker_id, sizeof(worker_id), ZMQ_SNDMORE);
             zmq_send(backend, 0, 0, ZMQ_SNDMORE);
             zmq_send(backend, &client_id, sizeof(client_id), ZMQ_SNDMORE);
             zmq_send(backend, 0, 0, ZMQ_SNDMORE);
             zmq_send(backend, &seq_id, sizeof(seq_id), ZMQ_SNDMORE);
-            zmq_send(backend, &request[0], rc, 0);
-            worker_queue.pop_front();
+            zmq_send(backend, &request[0], req_size, 0);         
         }
         std::for_each(workers.begin(),
                       workers.end(),
