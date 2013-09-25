@@ -6,8 +6,10 @@
 
 #include <iostream>
 #include <vector>
+#include <algorithm>
 #include <set> //we have a timestamp in the record data now
                //data is automatically sorted by timestamp
+#include <chrono>
 #include <cassert>
 #ifdef __APPLE__
 #include <ZeroMQ/zmq.h>
@@ -19,21 +21,26 @@ static const int WORKER_READY = 123;
 static const int HEARBEAT = 111;
 
 typedef std::chrono::time_point< std::chrono::steady_clock > timepoint;
+typedef std::chrono::duration< long int > duration;
 
-const static std::chrono::duration< long int > EXPIRATION_INTERVAL = 
-    std::chrono::milliseconds(15 * 1000);
-const static std::chrono::duration< long int > HEARTBEAT_INTERVAL =
-    std::chrono::milliseconds(1 * 1000);    
+const static duration EXPIRATION_INTERVAL = 
+    std::chrono::duration_cast< duration >(
+        std::chrono::milliseconds(15 * 1000));
+const static duration HEARTBEAT_INTERVAL =
+    std::chrono::duration_cast< duration >(
+        std::chrono::milliseconds(1 * 1000));    
 
 //------------------------------------------------------------------------------
 class worker_info {
+public:    
     bool operator >(const worker_info& wi) const {
-        return timestamp > wi.timestamp;
+        return timestamp_ > wi.timestamp_;
     }
     operator int() const { return id_; }
     worker_info(int id = -1) : 
         id_(id),
-        timestamp_(std::chrono::steady_clock::now()) {} 
+        timestamp_(std::chrono::steady_clock::now()) {}
+    const timepoint& timestamp() const { return timestamp_; }     
 private:
     int id_;
     timepoint timestamp_;    
@@ -43,15 +50,16 @@ typedef std::set< worker_info, std::greater< worker_info > > Workers;
 
 //------------------------------------------------------------------------------
 void purge(Workers& workers, long int cutoff) {
-    workers.erase(std::find_if(workers.rbegin(),
-                               workers.rend(),
-                               [cutoff](const worker_info& wi) { 
-                                 return 
-                                    std::chrono::duration_cast(
-                                        std::chrono::steady_clock::now()
-                                        - wi.timestamp
-                                        ) >= EXPIRATION;
-                                }), workers.rend());
+    workers.erase(std::find_if(
+                    workers.rbegin(),
+                    workers.rend(),
+                    [cutoff](const worker_info& wi) { 
+                     return 
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now()
+                            - wi.timestamp()
+                            ) >= EXPIRATION_INTERVAL;
+                    }));
 }
 //------------------------------------------------------------------------------
 void push(Workers& workers, int id) {
