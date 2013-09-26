@@ -17,18 +17,19 @@
 #include <zmq.h>
 #endif
 
-static const int WORKER_READY = 123;
-static const int HEARBEAT = 111;
+const int WORKER_READY = 123;
+const int HEARTBEAT = 111;
 
 typedef std::chrono::time_point< std::chrono::steady_clock > timepoint;
 typedef std::chrono::duration< long int > duration;
 
-const static duration EXPIRATION_INTERVAL = 
+const duration EXPIRATION_INTERVAL = 
     std::chrono::duration_cast< duration >(
         std::chrono::milliseconds(15 * 1000));
-const static duration HEARTBEAT_INTERVAL =
+const duration HEARTBEAT_INTERVAL =
     std::chrono::duration_cast< duration >(
-        std::chrono::milliseconds(1 * 1000));    
+        std::chrono::milliseconds(1 * 1000));
+const int TIMEOUT = 1 * 1000;             
 
 //------------------------------------------------------------------------------
 class worker_info {
@@ -40,7 +41,8 @@ public:
     worker_info(int id = -1) : 
         id_(id),
         timestamp_(std::chrono::steady_clock::now()) {}
-    const timepoint& timestamp() const { return timestamp_; }     
+    const timepoint& timestamp() const { return timestamp_; }
+    int id() const { return id_; }     
 private:
     int id_;
     timepoint timestamp_;    
@@ -49,47 +51,39 @@ private:
 typedef std::set< worker_info, std::greater< worker_info > > Workers;  
 
 //------------------------------------------------------------------------------
-<<<<<<< HEAD
-void purge(Workers& workers, long int cutoff) {
-    workers.erase(std::find_if(
-                    workers.rbegin(),
-                    workers.rend(),
-                    [cutoff](const worker_info& wi) { 
-                     return 
+void purge(Workers& workers, const duration& cutoff) {
+    typedef Workers::iterator RI;
+    // WI start = workers.find_if(workers)
+    RI end =  std::find_if(
+                    workers.begin(),
+                    workers.end(),
+                    [&cutoff](const worker_info& wi) { 
+                    return 
                         std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now()
                             - wi.timestamp()
-                            ) >= EXPIRATION_INTERVAL;
-                    }));
-=======
-void purge(Workers& workers,
-           const std::chrono::duration< long int >& cutoff) {
-    workers.erase(std::find_if(workers.rbegin(),
-                               workers.rend(),
-                               [&cutoff](const worker_info& wi) { 
-                                 return 
-                                    std::chrono::duration_cast(
-                                        std::chrono::steady_clock::now()
-                                        - wi.timestamp
-                                        ) >= cutoff;
-                                }), workers.rend());
->>>>>>> ecc0a0494643b7855186043c8f66c185d29f6d7d
+                            ) < cutoff;
+                        });
+    if(end == workers.end()) return;
+    workers.erase(workers.begin(), end);
+               
 }
 //------------------------------------------------------------------------------
 void push(Workers& workers, int id) {
-    //if worker already present remove
+    //if worker already present remove it and re-insert it in the right
+    //position
     workers.erase(std::find_if(workers.begin(),
                                workers.end(),
                                [id](const worker_info& wi){
-                                   return wi.id_ == id;
+                                   return wi.id() == id;
                                }));
     workers.insert(worker_info(id));
 }
 //------------------------------------------------------------------------------
-int pop(const Workers& workers) { 
-    if(worker.size() == 0) return -1; //throw instead
-    const int ret = *workers.begin();
-    worker.erase(workers.begin());
+int pop(Workers& workers) { 
+    assert(workers.size() > 0);
+    const int ret = workers.begin()->id();
+    workers.erase(workers.begin());
     return ret;
 }
 //------------------------------------------------------------------------------
@@ -121,15 +115,15 @@ int main(int argc, char** argv) {
     void* backend = zmq_socket(context, ZMQ_ROUTER);
     assert(backend);
     const int BACKEND_ID = 1000;
-    //since the worker is using a dealer socket it will parse
+    //since the worker is using a dealer socket it must parse
     //both identity and empty marker
-    assert(setsockopt(socket, ZMQ_IDENTITY, 
+    assert(zmq_setsockopt(backend, ZMQ_IDENTITY, 
            &BACKEND_ID, sizeof(BACKEND_ID)) == 0);
     assert(zmq_bind(frontend, FRONTEND_URI) == 0);
     assert(zmq_bind(backend, BACKEND_URI) == 0);
 
-    std::deque< int > worker_queue;
-    
+    Workers workers;
+
     int worker_id = -1;
     int client_id = -1;
     int rc = -1;
@@ -141,8 +135,8 @@ int main(int argc, char** argv) {
             {backend, 0, ZMQ_POLLIN, 0},
             {frontend, 0, ZMQ_POLLIN, 0}};
         purge(workers, EXPIRATION_INTERVAL);        
-        rc = zmq_poll(items, worker_queue.size() > 0 ? 2 : 1,
-                      MAX_DURATION.count());
+        rc = zmq_poll(items, workers.size() > 0 ? 2 : 1,
+                      TIMEOUT);
         if(rc == -1) break;
         if(items[0].revents & ZMQ_POLLIN) {
             zmq_recv(backend, &worker_id, sizeof(worker_id), 0);
@@ -180,13 +174,18 @@ int main(int argc, char** argv) {
             zmq_send(backend, &seq_id, sizeof(seq_id), ZMQ_SNDMORE);
             zmq_send(backend, &request[0], req_size, 0);         
         }
+        const int hb = HEARTBEAT; //capturing HEARTBEAT directly generates
+                                  //a warning because the lambda function should
+                                  //not capture a variable with non-automatic
+                                  //storage
         std::for_each(workers.begin(),
                       workers.end(),
-                      [backend, HEARTBEAT](const worker_info& wi) {
-                          zmq_send(backend, &wi.id,
-                                   sizeof(&wi.id), ZMQ_SNDMORE);
+                      [backend, hb](const worker_info& wi) {
+                          const int id = wi.id();
+                          zmq_send(backend, &id,
+                                   sizeof(id), ZMQ_SNDMORE);
                           zmq_send(backend, 0, 0, 0);
-                          zmq_send(backend, &HEARTBEAT, sizeof(HEARBEAT), 0);            
+                          zmq_send(backend, &hb, sizeof(hb), 0);            
                       });
 
 
