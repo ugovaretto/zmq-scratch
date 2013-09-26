@@ -73,6 +73,8 @@ void Client(const char* uri, int id) {
                     assert(socket);
                     assert(zmq_setsockopt(socket, ZMQ_LINGER, &LINGER_PERIOD,
                           sizeof(LINGER_PERIOD)) == 0);
+                    assert(zmq_setsockopt(socket, ZMQ_IDENTITY, 
+                           &id, sizeof(id)) == 0);
                     assert(zmq_connect(socket, uri) == 0);
                     items[0].socket = socket;
                     int rc = zmq_send(socket, &sequence, sizeof(sequence),

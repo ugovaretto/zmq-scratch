@@ -81,7 +81,6 @@ void Worker(const char* uri, int id) {
             //empty marker
             rc = zmq_recv(socket, 0, 0, 0);
             assert(rc == 0);
-            //if id is empty it's a hearbeat signal received from the server
             rc = zmq_recv(socket, &clientid, sizeof(clientid), 0);
             assert(rc > 0);
             if(clientid != HEARTBEAT) {
@@ -107,8 +106,8 @@ void Worker(const char* uri, int id) {
                         sleep(3); 
                     }
                 }
-                //specify server id (not needed for REQ sockects)
-                rc = zmq_send(socket, &serverid, sizeof(serverid, ZMQ_SNDMORE);
+                //specify destination server id (not needed for REQ sockets)
+                rc = zmq_send(socket, &serverid, sizeof(serverid), ZMQ_SNDMORE);
                 assert(rc > 0);
                 //send empty marker (not needed for REQ sockets)
                 rc = zmq_send(socket, 0, 0, ZMQ_SNDMORE);
@@ -135,8 +134,9 @@ void Worker(const char* uri, int id) {
                 assert(zmq_setsockopt(socket, ZMQ_LINGER,
                           &LINGER_TIME, sizeof(LINGER_TIME)));
                 assert(zmq_connect(socket, uri) == 0);
+                server_alive = MAX_LIVENESS;
             }
-            //send empty marker (not needed for REQ sockets)
+            //send heartbeat as WORKER_READY (no need for separate data)
             rc = zmq_send(socket, &serverid, sizeof(serverid, ZMQ_SNDMORE);
             assert(rc > 0); 
             rc = zmq_send(socket, 0, 0, ZMQ_SNDMORE);
