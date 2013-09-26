@@ -7,8 +7,9 @@
 #include <iostream>
 #include <vector>
 #include <algorithm>
-#include <set> //we have a timestamp in the record data now
+#include <set> //we have a timestamp in the record data' now
                //data is automatically sorted by timestamp
+               //from highest to lowest
 #include <chrono>
 #include <cassert>
 #ifdef __APPLE__
@@ -17,8 +18,9 @@
 #include <zmq.h>
 #endif
 
+namespace {
 const int WORKER_READY = 123;
-const int HEARTBEAT = 111;
+const int HEARTBEAT = 100000;
 
 typedef std::chrono::time_point< std::chrono::steady_clock > timepoint;
 typedef std::chrono::duration< long int > duration;
@@ -30,6 +32,7 @@ const duration HEARTBEAT_INTERVAL =
     std::chrono::duration_cast< duration >(
         std::chrono::milliseconds(1 * 1000));
 const int TIMEOUT = 1 * 1000;             
+}
 
 //------------------------------------------------------------------------------
 class worker_info {
@@ -51,10 +54,13 @@ private:
 typedef std::set< worker_info, std::greater< worker_info > > Workers;  
 
 //------------------------------------------------------------------------------
+//elements are ordered from highest to lowest
+//1) find the first element which has a time < expiration time
+//2) remove all elements from begin to element preceding the element
+///  with time < expiration time
 void purge(Workers& workers, const duration& cutoff) {
-    typedef Workers::iterator RI;
-    // WI start = workers.find_if(workers)
-    RI end =  std::find_if(
+    typedef Workers::iterator WI;
+    WI end =  std::find_if(
                     workers.begin(),
                     workers.end(),
                     [&cutoff](const worker_info& wi) { 
@@ -69,9 +75,9 @@ void purge(Workers& workers, const duration& cutoff) {
                
 }
 //------------------------------------------------------------------------------
+//if worker already present remove it and re-insert it in the right
+//position
 void push(Workers& workers, int id) {
-    //if worker already present remove it and re-insert it in the right
-    //position
     workers.erase(std::find_if(workers.begin(),
                                workers.end(),
                                [id](const worker_info& wi){
@@ -97,17 +103,8 @@ int main(int argc, char** argv) {
     const char* FRONTEND_URI = argv[1];
     const char* BACKEND_URI  = argv[2];
     const int MAX_REQUESTS = 100;
-    //this is required because on termination the worker threads are still
-    //running and a abort() will be called generating an error on termination;
-    //a cleaner way is to handle termination directly in the worker threads
-    //by:
-    // 1) using async i/o and exit automatically if no requests are received
-    //    after a specific amount of time OR
-    // 2) using async i/o and checking control messages on a separate channel OR
-    // 3) using async i/o and checking a condition variable set from the thread
-    //    that invokes the destructor
-    // 4) run indefinitely and handle SIGINT/SIGTERM
-   	
+  
+    //create communication objects   	
     void* context = zmq_ctx_new();
     assert(context);
     void* frontend = zmq_socket(context, ZMQ_ROUTER);
@@ -122,6 +119,7 @@ int main(int argc, char** argv) {
     assert(zmq_bind(frontend, FRONTEND_URI) == 0);
     assert(zmq_bind(backend, BACKEND_URI) == 0);
 
+    //workers ordered queue 
     Workers workers;
 
     int worker_id = -1;
@@ -130,19 +128,30 @@ int main(int argc, char** argv) {
     std::vector< char > request(0x100, 0);
     std::vector< char > reply(0x100, 0);
     int serviced_requests = 0;
+    //loop until max requests servided
     while(serviced_requests < MAX_REQUESTS) {
         zmq_pollitem_t items[] = {
             {backend, 0, ZMQ_POLLIN, 0},
             {frontend, 0, ZMQ_POLLIN, 0}};
+        //remove all workers that have not been active for a
+        //time > expiration interval    
         purge(workers, EXPIRATION_INTERVAL);        
+        //poll for incoming requests: if no workers are available
+        //only poll for workers(backend) since there is no point
+        //in trying to service a client request without active
+        //workers
         rc = zmq_poll(items, workers.size() > 0 ? 2 : 1,
                       TIMEOUT);
         if(rc == -1) break;
+        //data from workers
         if(items[0].revents & ZMQ_POLLIN) {
             zmq_recv(backend, &worker_id, sizeof(worker_id), 0);
-            push(workers, worker_id);
             zmq_recv(backend, 0, 0, 0);
             zmq_recv(backend, &client_id, sizeof(client_id), 0);
+            //add worker to list of available workers
+            push(workers, worker_id);
+            //of not a 'ready' message forward message to frontend
+            //workers send 'ready' messages when either 
             if(client_id != WORKER_READY) {
                 int seq_id = -1;
                 zmq_recv(backend, 0, 0, 0);
@@ -157,14 +166,18 @@ int main(int argc, char** argv) {
                 ++serviced_requests;
             } 
         }
+        //request from clients
         if(items[1].revents & ZMQ_POLLIN) {      
             int seq_id = -1;
+            //receive request |client id|<null>|request id|data|
             zmq_recv(frontend, &client_id, sizeof(client_id), 0);
             zmq_recv(frontend, 0, 0, 0);
             rc = zmq_recv(frontend, &seq_id, sizeof(seq_id), 0);
             assert(rc > 0);
-            const int req_size = zmq_recv(frontend, &request[0], request.size(), 0);
+            const int req_size = zmq_recv(frontend, &request[0],
+                                          request.size(), 0);
             assert(req_size > 0);
+            //take worker from list and forward request to it
             worker_id = pop(workers);
             assert(worker_id > 0);
             zmq_send(backend, &worker_id, sizeof(worker_id), ZMQ_SNDMORE);
@@ -178,6 +191,8 @@ int main(int argc, char** argv) {
                                   //a warning because the lambda function should
                                   //not capture a variable with non-automatic
                                   //storage
+        //send heartbeat request to all workers: workers reply to such request
+        //with a 'ready' message
         std::for_each(workers.begin(),
                       workers.end(),
                       [backend, hb](const worker_info& wi) {

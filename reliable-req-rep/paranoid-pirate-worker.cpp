@@ -28,7 +28,12 @@
 #include <zmq.h>
 #endif
 
-static const int WORKER_READY = 123;
+namespace {
+const int WORKER_READY = 123;
+const int HEARTBEAT = 100000;
+}
+
+typedef std::chrono::duration< long int > duration;
 
 //------------------------------------------------------------------------------
 void sleep(int s) {
@@ -37,8 +42,9 @@ void sleep(int s) {
 
 //------------------------------------------------------------------------------
 void Worker(const char* uri, int id) {
-    const std::chrono::duration< long int > POLL_INTERVAL =
-        std::chrono::duration::milliseconds(2500);
+    const duration POLL_INTERVAL =
+        std::chrono::duration_cast< duration >(
+            std::chrono::milliseconds(2500));
     const int MAX_LIVENESS = 3;
     const int MAX_RETRIES = 3;    
     assert(id != 0);
@@ -66,16 +72,22 @@ void Worker(const char* uri, int id) {
     const auto start = std::chrono::steady_clock::now();
     //receive: |server id|<empty>|client id|<empty>|sequence id| payload|                                                
     int clientid = -1;
-    int retries = MAX_RETRIES;
+    int serverid = -1;
+    int retries = MAX_RETRIES;       //number of reconnection attempts:
+                                     //after MAX_LIVENESS poll intervals
+                                     //without incoming data have passed
+
+    int server_alive = MAX_LIVENESS; //number poll intervals without incoming
+                                     //data passed before trying to reconnect 
+
     while(true) {
         zmq_pollitem_t items[] = {{socket, 0, ZMQ_POLLIN, 0}};
-        int rc = zmq_poll(items, 1, POLL_INTERVAL);
+        int rc = zmq_poll(items, 1, POLL_INTERVAL.count());
         if(rc == -1) break;
         if(items[0].revents & ZMQ_POLLIN) {
             server_alive = MAX_LIVENESS;
             retries = MAX_RETRIES;
             //id
-            int serverid = -1;
             rc = zmq_recv(socket, &serverid, sizeof(serverid), 0);
             assert(rc > 0);    
             //empty marker
@@ -83,6 +95,7 @@ void Worker(const char* uri, int id) {
             assert(rc == 0);
             rc = zmq_recv(socket, &clientid, sizeof(clientid), 0);
             assert(rc > 0);
+            //got data from broker
             if(clientid != HEARTBEAT) {
                 rc = zmq_recv(socket, 0, 0, 0);
                 assert(rc == 0);
@@ -122,10 +135,11 @@ void Worker(const char* uri, int id) {
                 assert(rc > 0);
                 sequence = -1;
             }
-        } else {
+        } else { //no data received after timeout
+            //decreament alive counter; if 0 
             if(--server_alive == 0 ) {
                 if(--retries == 0) break;
-                sleep(2 * POLL_INTERVAL);
+                sleep(2 * POLL_INTERVAL.count());
                 assert(zmq_close(socket) == 0);
                 socket = zmq_socket(ctx, ZMQ_DEALER);
                 assert(socket);
@@ -136,8 +150,8 @@ void Worker(const char* uri, int id) {
                 assert(zmq_connect(socket, uri) == 0);
                 server_alive = MAX_LIVENESS;
             }
-            //send heartbeat as WORKER_READY (no need for separate data)
-            rc = zmq_send(socket, &serverid, sizeof(serverid, ZMQ_SNDMORE);
+            //send heartbeat as WORKER_READY
+            rc = zmq_send(socket, &serverid, sizeof(serverid), ZMQ_SNDMORE);
             assert(rc > 0); 
             rc = zmq_send(socket, 0, 0, ZMQ_SNDMORE);
             assert(rc == 0);
