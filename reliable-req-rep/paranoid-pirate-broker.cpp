@@ -20,7 +20,7 @@
 
 namespace {
 const int WORKER_READY = 123;
-const int HEARTBEAT = 100000;
+const int HEARTBEAT = 111;
 
 typedef std::chrono::time_point< std::chrono::steady_clock > timepoint;
 typedef std::chrono::duration< long int > duration;

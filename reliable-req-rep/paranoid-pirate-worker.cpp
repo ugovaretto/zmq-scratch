@@ -30,7 +30,7 @@
 
 namespace {
 const int WORKER_READY = 123;
-const int HEARTBEAT = 100000;
+const int HEARTBEAT = 111;
 }
 
 typedef std::chrono::duration< long int > duration;
@@ -57,7 +57,7 @@ void Worker(const char* uri, int id) {
     assert(zmq_setsockopt(socket, ZMQ_IDENTITY, &id, sizeof(int)) == 0);
     const int LINGER_TIME = 0;
     assert(zmq_setsockopt(socket, ZMQ_LINGER,
-                          &LINGER_TIME, sizeof(LINGER_TIME)));
+                          &LINGER_TIME, sizeof(LINGER_TIME)) == 0);
     assert(zmq_connect(socket, uri) == 0);
     assert(zmq_send(socket, &WORKER_READY, sizeof(WORKER_READY), 0) > 0);
     std::vector< char > buffer(0x100);
@@ -146,7 +146,7 @@ void Worker(const char* uri, int id) {
                 assert(zmq_setsockopt(socket, ZMQ_IDENTITY,
                        &id, sizeof(int)) == 0);
                 assert(zmq_setsockopt(socket, ZMQ_LINGER,
-                          &LINGER_TIME, sizeof(LINGER_TIME)));
+                          &LINGER_TIME, sizeof(LINGER_TIME)) == 0);
                 assert(zmq_connect(socket, uri) == 0);
                 server_alive = MAX_LIVENESS;
             }
