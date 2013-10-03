@@ -9,6 +9,10 @@
 //of the |server id|<empty>| message headers handled automatically by the
 //REQ socket
 
+//IMPORTANT: when using DEALER sockets:
+// - do not send the target id since the target is determined by the run-time
+// - do not recv the source id 
+
 
 #include <iostream>
 #include <string>
@@ -47,6 +51,7 @@ void Worker(const char* uri, int id) {
             std::chrono::milliseconds(2500));
     const int MAX_LIVENESS = 3;
     const int MAX_RETRIES = 3;    
+    const int BROKER_ID = 1000;
     assert(id != 0);
     void* ctx = zmq_ctx_new();
     assert(ctx);
@@ -59,6 +64,10 @@ void Worker(const char* uri, int id) {
     assert(zmq_setsockopt(socket, ZMQ_LINGER,
                           &LINGER_TIME, sizeof(LINGER_TIME)) == 0);
     assert(zmq_connect(socket, uri) == 0);
+    //other end expects a message in ZMQ_REQ/REP format: |id|<empty>|data|
+    //DEALER sockets: never select the destination since it'a automatically
+    //selected by run-time, different from ROUTER
+    assert(zmq_send(socket, 0, 0, ZMQ_SNDMORE) == 0);
     assert(zmq_send(socket, &WORKER_READY, sizeof(WORKER_READY), 0) > 0);
     std::vector< char > buffer(0x100);
     int sequence = -1;
@@ -87,10 +96,6 @@ void Worker(const char* uri, int id) {
         if(items[0].revents & ZMQ_POLLIN) {
             server_alive = MAX_LIVENESS;
             retries = MAX_RETRIES;
-            //id
-            rc = zmq_recv(socket, &serverid, sizeof(serverid), 0);
-            assert(rc > 0);    
-            //empty marker
             rc = zmq_recv(socket, 0, 0, 0);
             assert(rc == 0);
             rc = zmq_recv(socket, &clientid, sizeof(clientid), 0);
@@ -107,7 +112,7 @@ void Worker(const char* uri, int id) {
                 assert(buffer_size > 0 && buffer_size <= buffer.size());
                 const auto elapsed_time = std::chrono::steady_clock::now()
                                           - start;
-                //20% probability of crashing after guaranteed uptime
+#ifdef SIMULATION                
                 if(elapsed_time > GUARANTEED_UP_TIME) {
                     //10% probability of crashing
                     if(dist(rng) > NINETY_PERCENT) {
@@ -119,9 +124,7 @@ void Worker(const char* uri, int id) {
                         sleep(3); 
                     }
                 }
-                //specify destination server id (not needed for REQ sockets)
-                rc = zmq_send(socket, &serverid, sizeof(serverid), ZMQ_SNDMORE);
-                assert(rc > 0);
+#endif                                          
                 //send empty marker (not needed for REQ sockets)
                 rc = zmq_send(socket, 0, 0, ZMQ_SNDMORE);
                 assert(rc == 0);
@@ -151,8 +154,6 @@ void Worker(const char* uri, int id) {
                 server_alive = MAX_LIVENESS;
             }
             //send heartbeat as WORKER_READY
-            rc = zmq_send(socket, &serverid, sizeof(serverid), ZMQ_SNDMORE);
-            assert(rc > 0); 
             rc = zmq_send(socket, 0, 0, ZMQ_SNDMORE);
             assert(rc == 0);
             zmq_send(socket, &WORKER_READY, sizeof(WORKER_READY), 0);

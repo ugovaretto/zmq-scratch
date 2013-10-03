@@ -18,6 +18,9 @@
 #include <zmq.h>
 #endif
 
+#define __ std::cout << __LINE__ << std::endl;
+
+
 namespace {
 const int WORKER_READY = 123;
 const int HEARTBEAT = 111;
@@ -77,14 +80,16 @@ void purge(Workers& workers, const duration& cutoff) {
 //------------------------------------------------------------------------------
 //if worker already present remove it and re-insert it in the right
 //position
-void push(Workers& workers, int id) {
-    workers.erase(std::find_if(workers.begin(),
-                               workers.end(),
-                               [id](const worker_info& wi){
-                                   return wi.id() == id;
-                               }));
+void push(Workers& workers, int id) {__
+    if(!workers.empty()) {
+        workers.erase(std::find_if(workers.begin(),
+                                   workers.end(),
+                                   [id](const worker_info& wi){
+                                       return wi.id() == id;
+                                   }));
+    }
     workers.insert(worker_info(id));
-}
+__}
 //------------------------------------------------------------------------------
 int pop(Workers& workers) { 
     assert(workers.size() > 0);
@@ -116,6 +121,9 @@ int main(int argc, char** argv) {
     //both identity and empty marker
     assert(zmq_setsockopt(backend, ZMQ_IDENTITY, 
            &BACKEND_ID, sizeof(BACKEND_ID)) == 0);
+    //only setting the backend id because we are using a ROUTER-DEALER
+    //socket; the clients use a REQ socket and therefore we can use
+    //an automatically generated id
     assert(zmq_bind(frontend, FRONTEND_URI) == 0);
     assert(zmq_bind(backend, BACKEND_URI) == 0);
 
@@ -135,7 +143,7 @@ int main(int argc, char** argv) {
             {frontend, 0, ZMQ_POLLIN, 0}};
         //remove all workers that have not been active for a
         //time > expiration interval    
-        purge(workers, EXPIRATION_INTERVAL);        
+        //purge(workers, EXPIRATION_INTERVAL);        
         //poll for incoming requests: if no workers are available
         //only poll for workers(backend) since there is no point
         //in trying to service a client request without active
@@ -144,17 +152,18 @@ int main(int argc, char** argv) {
                       TIMEOUT);
         if(rc == -1) break;
         //data from workers
-        if(items[0].revents & ZMQ_POLLIN) {
-            zmq_recv(backend, &worker_id, sizeof(worker_id), 0);
-            zmq_recv(backend, 0, 0, 0);
-            zmq_recv(backend, &client_id, sizeof(client_id), 0);
+        if(items[0].revents & ZMQ_POLLIN) { __    
+            assert(zmq_recv(backend, &worker_id, sizeof(worker_id), 0) > 0); __
+            assert(zmq_recv(backend, 0, 0, 0) == 0); __       
+            assert(zmq_recv(backend, &client_id, sizeof(client_id), 0) > 0); __
             //add worker to list of available workers
-            push(workers, worker_id);
+            __ push(workers, worker_id);
+            assert(workers.size() > 0);__
             //of not a 'ready' message forward message to frontend
             //workers send 'ready' messages when either 
             if(client_id != WORKER_READY) {
                 int seq_id = -1;
-                zmq_recv(backend, 0, 0, 0);
+                assert(zmq_recv(backend, 0, 0, 0) == 0);
                 rc = zmq_recv(backend, &seq_id, sizeof(seq_id), 0);
                 assert(rc > 0);
                 rc = zmq_recv(backend, &reply[0], reply.size(), 0);
@@ -165,9 +174,9 @@ int main(int argc, char** argv) {
                 zmq_send(frontend, &reply[0], rc, 0);
                 ++serviced_requests;
             } 
-        }
+        } 
         //request from clients
-        if(items[1].revents & ZMQ_POLLIN) {      
+        if(items[1].revents & ZMQ_POLLIN) { 
             int seq_id = -1;
             //receive request |client id|<null>|request id|data|
             zmq_recv(frontend, &client_id, sizeof(client_id), 0);
@@ -186,7 +195,7 @@ int main(int argc, char** argv) {
             zmq_send(backend, 0, 0, ZMQ_SNDMORE);
             zmq_send(backend, &seq_id, sizeof(seq_id), ZMQ_SNDMORE);
             zmq_send(backend, &request[0], req_size, 0);         
-        }
+        } 
         const int hb = HEARTBEAT; //capturing HEARTBEAT directly generates
                                   //a warning because the lambda function should
                                   //not capture a variable with non-automatic
@@ -199,10 +208,10 @@ int main(int argc, char** argv) {
                           const int id = wi.id();
                           zmq_send(backend, &id,
                                    sizeof(id), ZMQ_SNDMORE);
-                          zmq_send(backend, 0, 0, 0);
+                          zmq_send(backend, 0, 0, ZMQ_SNDMORE);
                           zmq_send(backend, &hb, sizeof(hb), 0);            
                       });
-
+        
 
     }
     zmq_close(frontend);
