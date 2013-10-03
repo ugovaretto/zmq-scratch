@@ -18,7 +18,7 @@
 #include <zmq.h>
 #endif
 
-#define __ std::cout << __LINE__ << std::endl;
+//#define __ std::cout << __LINE__ << std::endl;
 
 
 namespace {
@@ -80,16 +80,17 @@ void purge(Workers& workers, const duration& cutoff) {
 //------------------------------------------------------------------------------
 //if worker already present remove it and re-insert it in the right
 //position
-void push(Workers& workers, int id) {__
-    if(!workers.empty()) {
-        workers.erase(std::find_if(workers.begin(),
-                                   workers.end(),
-                                   [id](const worker_info& wi){
-                                       return wi.id() == id;
-                                   }));
-    }
+void push(Workers& workers, int id) {
+
+    Workers::iterator it = std::find_if(workers.begin(),
+                               workers.end(),
+                               [id](const worker_info& wi){
+                                   return wi.id() == id;
+                               });
+    if(it != workers.end()) workers.erase(it);
+    
     workers.insert(worker_info(id));
-__}
+}
 //------------------------------------------------------------------------------
 int pop(Workers& workers) { 
     assert(workers.size() > 0);
@@ -142,8 +143,10 @@ int main(int argc, char** argv) {
             {backend, 0, ZMQ_POLLIN, 0},
             {frontend, 0, ZMQ_POLLIN, 0}};
         //remove all workers that have not been active for a
-        //time > expiration interval    
+        //time > expiration interval
+        //XXX TODO: TEST    
         //purge(workers, EXPIRATION_INTERVAL);        
+        //XXX    
         //poll for incoming requests: if no workers are available
         //only poll for workers(backend) since there is no point
         //in trying to service a client request without active
@@ -152,13 +155,13 @@ int main(int argc, char** argv) {
                       TIMEOUT);
         if(rc == -1) break;
         //data from workers
-        if(items[0].revents & ZMQ_POLLIN) { __    
-            assert(zmq_recv(backend, &worker_id, sizeof(worker_id), 0) > 0); __
-            assert(zmq_recv(backend, 0, 0, 0) == 0); __       
-            assert(zmq_recv(backend, &client_id, sizeof(client_id), 0) > 0); __
+        if(items[0].revents & ZMQ_POLLIN) {    
+            assert(zmq_recv(backend, &worker_id, sizeof(worker_id), 0) > 0);
+            assert(zmq_recv(backend, 0, 0, 0) == 0);       
+            assert(zmq_recv(backend, &client_id, sizeof(client_id), 0) > 0);
             //add worker to list of available workers
-            __ push(workers, worker_id);
-            assert(workers.size() > 0);__
+            push(workers, worker_id);
+            assert(workers.size() > 0);
             //of not a 'ready' message forward message to frontend
             //workers send 'ready' messages when either 
             if(client_id != WORKER_READY) {
