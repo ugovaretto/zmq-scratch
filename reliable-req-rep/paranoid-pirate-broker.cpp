@@ -18,9 +18,6 @@
 #include <zmq.h>
 #endif
 
-//#define __ std::cout << __LINE__ << std::endl;
-
-
 namespace {
 const int WORKER_READY = 123;
 const int HEARTBEAT = 111;
@@ -54,16 +51,15 @@ private:
     timepoint timestamp_;    
 };
 
-typedef std::set< worker_info, std::greater< worker_info > > Workers;  
+typedef std::set< worker_info > Workers;  
 
 //------------------------------------------------------------------------------
 //elements are ordered from highest to lowest
-//1) find the first element which has a time < expiration time
-//2) remove all elements from begin to element preceding the element
-///  with time < expiration time
+//1) find the first element which has a time > expiration time
+//2) remove all elements from that element to last element is set
 void purge(Workers& workers, const duration& cutoff) {
     typedef Workers::iterator WI;
-    WI end =  std::find_if(
+    WI start =  std::find_if(
                     workers.begin(),
                     workers.end(),
                     [&cutoff](const worker_info& wi) { 
@@ -71,10 +67,10 @@ void purge(Workers& workers, const duration& cutoff) {
                         std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now()
                             - wi.timestamp()
-                            ) < cutoff;
+                            ) > cutoff;
                         });
-    if(end == workers.end()) return;
-    workers.erase(workers.begin(), end);
+    if(start == workers.end()) return;
+    workers.erase(start, workers.end());
                
 }
 //------------------------------------------------------------------------------
@@ -94,8 +90,9 @@ void push(Workers& workers, int id) {
 //------------------------------------------------------------------------------
 int pop(Workers& workers) { 
     assert(workers.size() > 0);
-    const int ret = workers.begin()->id();
-    workers.erase(workers.begin());
+    std::set< worker_info >::iterator back = --workers.end();
+    const int ret = back->id();
+    workers.erase(back);
     return ret;
 }
 //------------------------------------------------------------------------------
@@ -117,20 +114,12 @@ int main(int argc, char** argv) {
     assert(frontend);
     void* backend = zmq_socket(context, ZMQ_ROUTER);
     assert(backend);
-    const int BACKEND_ID = 1000;
-    //since the worker is using a dealer socket it must parse
-    //both identity and empty marker
-    assert(zmq_setsockopt(backend, ZMQ_IDENTITY, 
-           &BACKEND_ID, sizeof(BACKEND_ID)) == 0);
-    //only setting the backend id because we are using a ROUTER-DEALER
-    //socket; the clients use a REQ socket and therefore we can use
-    //an automatically generated id
     assert(zmq_bind(frontend, FRONTEND_URI) == 0);
     assert(zmq_bind(backend, BACKEND_URI) == 0);
 
     //workers ordered queue 
     Workers workers;
-
+c 
     int worker_id = -1;
     int client_id = -1;
     int rc = -1;
@@ -145,7 +134,7 @@ int main(int argc, char** argv) {
         //remove all workers that have not been active for a
         //time > expiration interval
         //XXX TODO: TEST    
-        //purge(workers, EXPIRATION_INTERVAL);        
+        purge(workers, EXPIRATION_INTERVAL);        
         //XXX    
         //poll for incoming requests: if no workers are available
         //only poll for workers(backend) since there is no point
