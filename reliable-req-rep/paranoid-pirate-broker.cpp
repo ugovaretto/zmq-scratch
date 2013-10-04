@@ -119,7 +119,7 @@ int main(int argc, char** argv) {
 
     //workers ordered queue 
     Workers workers;
-c 
+ 
     int worker_id = -1;
     int client_id = -1;
     int rc = -1;

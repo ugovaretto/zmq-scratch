@@ -11,7 +11,8 @@
 
 //IMPORTANT: when using DEALER sockets:
 // - do not send the target id since the target is determined by the run-time
-// - do not recv the source id 
+//   as done for REQ
+// - do not recv the source id when connected to a router socket
 
 
 #include <iostream>
