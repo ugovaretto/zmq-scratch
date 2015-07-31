@@ -4,10 +4,22 @@
 #include <cstdlib>
 #include <fstream>
 #include <vector>
+#include <limits>
 
 #include <zmq.h>
 
 using namespace std;
+
+size_t FileSize(ifstream& is) {
+  const streampos pos = is.tellg();
+  is.clear();
+  is.seekg(is.beg);
+  is.ignore(numeric_limits<streamsize>::max());
+  const size_t size = is.gcount();
+  is.clear(); //clear EOF (set by ignore)
+  is.seekg(pos);
+  return size;
+}
 
 int main(int argc, char** argv) {
     if(argc < 4) {
@@ -20,8 +32,8 @@ int main(int argc, char** argv) {
 	cerr << "Cannot open file " << argv[3] << endl;
 	return EXIT_FAILURE;
     }
-    is.seekg(is.end);
-    const size_t fsize = is.tellg();
+    const size_t fsize = FileSize(is);
+    clog << fsize << endl;
     is.seekg(is.beg);
     std::vector< char > buffer(fsize);
     
@@ -30,18 +42,21 @@ int main(int argc, char** argv) {
     zmq_connect(requester, remoteAddress.c_str());
     const int numChunks = 1; //= fsize / CHUNK_SIZE
     const size_t chunkSize = buffer.size();
-    zmq_send(requester, (char*) &fsize, sizeof(fsize), ZMQ_SNDMORE);
-    zmq_send(requester, (char*) &numChunks, sizeof(numChunks), ZMQ_SNDMORE);
+    zmq_send(requester, (char*) &fsize, sizeof(fsize), 0);
+    zmq_recv(requester, 0, 0, 0);
+    zmq_send(requester, (char*) &numChunks, sizeof(numChunks), 0);
+    zmq_recv(requester, 0, 0, 0);
     for(int i = 0; i != numChunks; ++i) {
 	is.read(&buffer[0], buffer.size()); 
-	zmq_send(requester, &buffer[0], buffer.size(), ZMQ_SNDMORE);
+	zmq_send(requester, &buffer[0], buffer.size(), 0);
+	zmq_recv(requester, 0, 0, 0);
     }
 
 //     if(fsize % CHUNK_SIZE != 0) {
 // 	is.read(&buffer[0], fsize % CHUNK_SIZE);
 // 	zmq_send(requester, &buffer[0], fsize % CHUNK_SIZE, 0);
 //     } else zmq_send(requester, 0, 0, 0);	
-    zmq_send(requester, 0, 0, 0);
+    //zmq_send(requester, 0, 0, 0);
     zmq_close(requester);
     zmq_ctx_destroy(context);
     return EXIT_SUCCESS;	
