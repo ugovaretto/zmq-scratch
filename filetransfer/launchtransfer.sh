@@ -6,13 +6,13 @@
 #second arg is the node where the client needs to connect to
 #i.e. the server node itself
 #aprun -N1 -n2 ./launchtransfer.sh nid00008 nid00008 /tmp/zfile
-
+port=5555
 h=`hostname`
 if [ $h = $1 ]; then
-  ./hwserver
+  ./filerecv $port /tmp/received
 else
+  chunksize=$4
   filename=$3
   servernode=$2
-  port=555 	
-  ./hwclient $servernode $port $filename
+  ./filesend $servernode $port $filename $chunksize
 fi
