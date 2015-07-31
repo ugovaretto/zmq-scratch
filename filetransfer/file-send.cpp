@@ -5,6 +5,7 @@
 #include <fstream>
 #include <vector>
 #include <limits>
+#include <algorithm>
 
 #include <zmq.h>
 
@@ -22,8 +23,8 @@ size_t FileSize(ifstream& is) {
 }
 
 int main(int argc, char** argv) {
-    if(argc < 4) {
-	cerr << "usage: " << argv[0] << "<server ip address> <port> <filename>" << endl;
+    if(argc < 5) {
+	cerr << "usage: " << argv[0] << "<server ip address> <port> <filename> <chunk size>" << endl;
 	return EXIT_FAILURE;
     }
     const string remoteAddress = "tcp://" + string(argv[1]) + ":" + string(argv[2]);
@@ -33,15 +34,16 @@ int main(int argc, char** argv) {
 	return EXIT_FAILURE;
     }
     const size_t fsize = FileSize(is);
-    clog << fsize << endl;
-    is.seekg(is.beg);
-    std::vector< char > buffer(fsize);
+    assert(fsize > 0);
+    char* pEnd = nullptr;
+    const size_t chunkSize = min(fsize, size_t(strtoull(argv[4], &pEnd, 10)));
+    assert(chunkSize > 0);
+    std::vector< char > buffer(chunkSize);
     
     void* context = zmq_ctx_new();
     void* requester = zmq_socket(context, ZMQ_REQ);
     zmq_connect(requester, remoteAddress.c_str());
-    const int numChunks = 1; //= fsize / CHUNK_SIZE
-    const size_t chunkSize = buffer.size();
+    const int numChunks = fsize / chunkSize;
     zmq_send(requester, (char*) &fsize, sizeof(fsize), 0);
     zmq_recv(requester, 0, 0, 0);
     zmq_send(requester, (char*) &numChunks, sizeof(numChunks), 0);
@@ -51,12 +53,11 @@ int main(int argc, char** argv) {
 	zmq_send(requester, &buffer[0], buffer.size(), 0);
 	zmq_recv(requester, 0, 0, 0);
     }
-
-//     if(fsize % CHUNK_SIZE != 0) {
-// 	is.read(&buffer[0], fsize % CHUNK_SIZE);
-// 	zmq_send(requester, &buffer[0], fsize % CHUNK_SIZE, 0);
-//     } else zmq_send(requester, 0, 0, 0);	
-    //zmq_send(requester, 0, 0, 0);
+    if(fsize % chunkSize != 0) {
+	is.read(&buffer[0], fsize % chunkSize);
+	zmq_send(requester, &buffer[0], fsize % chunkSize, 0);
+	zmq_recv(requester, 0, 0, 0);
+    }
     zmq_close(requester);
     zmq_ctx_destroy(context);
     return EXIT_SUCCESS;	
