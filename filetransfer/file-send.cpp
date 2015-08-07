@@ -56,7 +56,7 @@ int main(int argc, char** argv) {
     zmq_recv(requester, 0, 0, 0);
     zmq_send(requester, (char*) &chunkSize, sizeof(numChunks), 0);
     zmq_recv(requester, 0, 0, 0);
-    clog << "Buffer size: " << buffer.size() << endl;
+    //clog << "Buffer size: " << buffer.size() << endl;
     for(int i = 0; i != numChunks; ++i) {
         is.read(&buffer[0], buffer.size());
         zmq_send(requester, &buffer[0], buffer.size(), 0);
