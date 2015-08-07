@@ -11,7 +11,7 @@ using namespace std;
 
 int main(int argc, char** argv) {
     if(argc < 3) {
-        cerr << "usage: " << argv[0] << "<port> <filename>" << endl;
+        cerr << "usage: " << argv[0] << " <port> <filename>" << endl;
         return EXIT_FAILURE;
     }
     const string bindAddress = "tcp://*:" + string(argv[1]);
@@ -36,15 +36,15 @@ int main(int argc, char** argv) {
     clog << "Buffer size: " << buffer.size() << endl;
     for(int i = 0; i != numChunks; ++i) {
         zmq_recv(responder, &buffer[0], buffer.size(), 0);
-	zmq_send(responder, 0, 0, 0);
+        zmq_send(responder, 0, 0, 0);
         clog << "chunk received" << endl;
-	os.write(&buffer[0], buffer.size());
+        os.write(&buffer[0], buffer.size());
     }
     if(fileSize % chunkSize != 0) {
-	zmq_recv(responder, &buffer[0], fileSize % chunkSize, 0);
-	zmq_send(responder, 0, 0, 0);
-	clog << "chunk received" << endl;
-	os.write(&buffer[0], fileSize % chunkSize);
+        zmq_recv(responder, &buffer[0], fileSize % chunkSize, 0);
+        zmq_send(responder, 0, 0, 0);
+        clog << "chunk received" << endl;
+        os.write(&buffer[0], fileSize % chunkSize);
     }
     zmq_close(responder);
     zmq_ctx_destroy(context);

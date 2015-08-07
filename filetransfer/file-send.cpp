@@ -24,14 +24,16 @@ size_t FileSize(ifstream& is) {
 
 int main(int argc, char** argv) {
     if(argc < 5) {
-	cerr << "usage: " << argv[0] << "<server ip address> <port> <filename> <chunk size>" << endl;
-	return EXIT_FAILURE;
+        cerr << "usage: " << argv[0] << " <server ip address> <port> "
+                "<filename> <chunk size>" << endl;
+        return EXIT_FAILURE;
     }
-    const string remoteAddress = "tcp://" + string(argv[1]) + ":" + string(argv[2]);
+    const string remoteAddress = "tcp://" + string(argv[1])
+                                 + ":" + string(argv[2]);
     ifstream is(argv[3], ios::in | ios::binary);
     if(!is) {
-	cerr << "Cannot open file " << argv[3] << endl;
-	return EXIT_FAILURE;
+        cerr << "Cannot open file " << argv[3] << endl;
+        return EXIT_FAILURE;
     }
     const size_t fsize = FileSize(is);
     assert(fsize > 0);
@@ -50,14 +52,14 @@ int main(int argc, char** argv) {
     zmq_recv(requester, 0, 0, 0);
     clog << "Buffer size: " << buffer.size() << endl;
     for(int i = 0; i != numChunks; ++i) {
-	is.read(&buffer[0], buffer.size()); 
-	zmq_send(requester, &buffer[0], buffer.size(), 0);
-	zmq_recv(requester, 0, 0, 0);
+        is.read(&buffer[0], buffer.size());
+        zmq_send(requester, &buffer[0], buffer.size(), 0);
+        zmq_recv(requester, 0, 0, 0);
     }
     if(fsize % chunkSize != 0) {
-	is.read(&buffer[0], fsize % chunkSize);
-	zmq_send(requester, &buffer[0], fsize % chunkSize, 0);
-	zmq_recv(requester, 0, 0, 0);
+        is.read(&buffer[0], (long int)(fsize % chunkSize));
+        zmq_send(requester, &buffer[0], fsize % chunkSize, 0);
+        zmq_recv(requester, 0, 0, 0);
     }
     zmq_close(requester);
     zmq_ctx_destroy(context);
