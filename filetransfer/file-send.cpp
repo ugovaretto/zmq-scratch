@@ -26,10 +26,13 @@ int main(int argc, char** argv) {
     if(argc < 5) {
         cerr << "usage: " << argv[0] << " <server ip address> <port> "
                 "<filename> <chunk size>" << endl;
+        cerr << "if server address is \"*\" (with quotes) then "
+                "it starts as a server, client otherwise" << endl;
         return EXIT_FAILURE;
     }
-    const string remoteAddress = "tcp://" + string(argv[1])
-                                 + ":" + string(argv[2]);
+    const string address = "tcp://" + string(argv[1])
+                           + ":" + string(argv[2]);
+    const bool SERVER = string(argv[1]) == "*";
     ifstream is(argv[3], ios::in | ios::binary);
     if(!is) {
         cerr << "Cannot open file " << argv[3] << endl;
@@ -44,7 +47,10 @@ int main(int argc, char** argv) {
     
     void* context = zmq_ctx_new();
     void* requester = zmq_socket(context, ZMQ_REQ);
-    zmq_connect(requester, remoteAddress.c_str());
+
+    if(SERVER) zmq_bind(requester, address.c_str());
+    else zmq_connect(requester, address.c_str());
+
     const int numChunks = fsize / chunkSize;
     zmq_send(requester, (char*) &fsize, sizeof(fsize), 0);
     zmq_recv(requester, 0, 0, 0);
