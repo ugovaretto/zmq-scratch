@@ -9,6 +9,7 @@
 #include <vector>
 #include <vector>
 #include <chrono>
+#include <thread>
 
 #include <zmq.h>
 
@@ -38,10 +39,17 @@ int main(int argc, char** argv) {
     while(1) {
         const chrono::time_point< chrono::steady_clock > start =
             chrono::steady_clock::now();
-        for(int i = 0; i != NUM_MESSAGES; ++i) {
-            rc = zmq_recv(publisher, buffer.data(), buffer.size(), 0);
-            assert(rc == buffer.size());
+        int i = 0;
+        while(i != NUM_MESSAGES) {
+            rc = zmq_recv(publisher, buffer.data(), buffer.size(), ZMQ_NOBLOCK);
+            if(rc == buffer.size()) ++i;
+            else this_thread::sleep_for(chrono::milliseconds(4));
         }
+//        for(int i = 0; i != NUM_MESSAGES; ++i) {
+//            rc = zmq_recv(publisher, buffer.data(), buffer.size(), ZMQ_NOBLOCK);
+//            cout << rc << ' ';
+//            //assert(rc == buffer.size());
+//        }
         const chrono::time_point< chrono::steady_clock > end =
                 chrono::steady_clock::now();
         const chrono::duration< double, ratio<1, 1> > d = end - start;

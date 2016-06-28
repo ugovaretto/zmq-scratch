@@ -11,6 +11,8 @@
 #include <vector>
 #include <string>
 #include <algorithm>
+#include <chrono>
+#include <thread>
 
 #include <zmq.h>
 
@@ -38,6 +40,7 @@ int main(int argc, char** argv) {
     vector< char > buffer(MESSAGE_SIZE);
     while(1) {
     	zmq_send(pub, buffer.data(), buffer.size(), 0);
+        this_thread::sleep_for(chrono::microseconds(100));
     }
     rc = zmq_close(pub);
     assert(rc == 0);
