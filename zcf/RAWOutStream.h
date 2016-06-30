@@ -13,6 +13,9 @@
 #include "SyncQueue.h"
 
 
+//RAWOutStream< int > os;
+//os.Send(3);
+
 template < typename DataT >
 struct DefaultSerializer {
     std::vector< char > operator()(const DataT& d) const {

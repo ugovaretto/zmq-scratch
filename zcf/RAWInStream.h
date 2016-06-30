@@ -6,6 +6,8 @@
 #include <thread>
 #include <tuple>
 #include <string>
+#include <future>
+#include <chrono>
 
 #include <zmq.h>
 
@@ -62,7 +64,7 @@ public:
         stop_ = true;
     }
     void Loop(const Callback& cback) { //sync
-        while(true) {
+        while(!stop_) {
             if(!cback(queue_.Pop())) break;
         }
     }
@@ -87,14 +89,24 @@ private:
     }
     void Execute(const char* URI,
                  size_t bufferSize = 0x100000,
-                 int timeoutInSeconds = -1 /*not implemented*/ ) { //sync
+                 int timeoutInSeconds = -1 ) { //sync
         void* ctx = nullptr;
         void* sub = nullptr;
         std::tie(ctx, sub) = CreateZMQContextAndSocket();
         std::vector< char > buffer(bufferSize);
-        while(stop_) {
-            int rc = zmq_recv(sub, buffer.data(), buffer.size(), 0);
-            if(rc < 0) throw std::runtime_error("Error receiving data");
+        const std::chrono::microseconds delay(500);
+        const int maxRetries
+          = timeoutInSeconds
+            / std::chrono::duration_cast< std::chrono::seconds>(delay).count();
+        int retry = 0;
+        while(!stop_) {
+            int rc = zmq_recv(sub, buffer.data(), buffer.size(), ZMQ_NOBLOCK);
+            if(rc < 0) {
+                this_thread::sleep_for(delay);
+                ++retry;
+                if(retry > maxRetries && maxRetries > 0) stop_ = true;
+                continue;
+            }
             if(rc == 0 || stop_) break;
             queue_.push(deserialize_(buffer.data(), rc));
         }
