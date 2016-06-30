@@ -5,6 +5,8 @@
 #include <stdexcept>
 #include <thread>
 #include <tuple>
+#include <future>
+#include <chrono>
 
 #include <zmq.h>
 
@@ -19,6 +21,18 @@ struct DefaultSerializer {
         const char* p = reinterpret_cast< const char* >(&d);
         std::copy(p, p + sizeof(p), v.begin());
         return v;
+    }
+};
+
+template < typename T >
+struct DefaultSerializer< std::vector< T > > {
+    std::vector< char > operator()(const std::vector< T >& v) const {
+        const size_t bytesize
+                = v.size() * sizeof(std::vector< T >::value_type);
+        std::vector< char > r(v.size() * sizeof(std::vector< T >::value_type));
+        const char* begin = reinterpret_cast< const char* >(v.data());
+        memmove(r.data(), begin, begin + bytesize);
+        return r;
     }
 };
 
@@ -39,9 +53,14 @@ public:
     void Buffer(FwdT begin, FwdT end) {
         queue_.Buffer(begin, end);
     }
-    void Stop() { //sync
+    ///stops if the result of serialize_(DataT()) is an empty vector<char>
+    ///@param timeoutSeconds file stop request then wait until timeout before
+    ///       returning
+    bool Stop(int timeoutSeconds = 4) { //sync
         queue_.PushFront(DataT());
-        taskFuture_.wait();
+        const std::future_status =
+                taskFuture_.wait_for(std::chrono::seconds(timeoutSeconds));
+        return std::future_status == std::future_status_ready;
     }
     ~RAWOutStream() {
         Stop();
@@ -94,5 +113,5 @@ private:
 private:
     SyncQueue< DataT > queue_;
     std::future< void > taskFuture_;
-    SerializerT serialize_;
+    SerializerT serialize_ = SerializerT();
 };

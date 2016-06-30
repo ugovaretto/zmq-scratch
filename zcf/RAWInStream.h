@@ -12,64 +12,92 @@
 #include "SyncQueue.h"
 
 
+//usage
+// const char* subscribeURL = "tcp://localhost:5556";
+// RAWInstream< int > is;
+// auto handleData = [](int i) { cout << i << endl; };
+// int inactivityTimeoutInSec = 10; //optional, not currently supported
+// //blocking call, will stop at the reception of an empty message
+// is.Start(subscribeURL, handleData, inactivityTimeoutInSec);
+
+
 template < typename DataT >
 struct DefaultDeSerializer {
-    DataT operator()(const std::vector< char >& buffer) const {
+    DataT operator()(const char* buf, int size) const {
+        assert(buf);
+        assert(size > 0);
         ///@todo add Size and Copy(void*, data) customizations
         DataT d;
-        if(sizeof(d) != buffer.size())
+        if(sizeof(d) != size)
             throw std::domain_error("Wrong data size");
-        memmove(&d, buffer.data(), buffer.size());
+        memmove(&d, ptr, size);
         return d;
+    }
+};
+
+template < typename T >
+struct DefaultDeSerializer< std::vector< T > > {
+    std::vector< T > operator()(const char* buf, int size) const {
+        assert(buf);
+        assert(size > 0);
+        const T* begin = reinterpret_cast< const T *>(buf);
+        const size_t size = size / sizeof(T);
+        return std::vector< T >(begin, begin + size);
     }
 };
 
 template< typename DataT,
           typename DeSerializerT = DefaultDeSerializer< DataT > >
 class RAWInStream {
+    using Callback = std::function(const DataT&);
 public:
     RAWInStream() = delete;
     RAWInStream(const RAWInStream&) = delete;
     RAWInStream(RAWInStream&&) = default;
-    RAWInStream(const char *URI, const DeSerializerT& D = DeSerializerT())
-            : deserialize_(D) {
+    RAWInStream(const char *URI, const DeSerializerT& d = DeSerializerT())
+            : deserialize_(d), stop_(false) {
+        Start();
     }
-    void Start() { //async
-        
+    bool Stop() { //call from separate thread
+        stop_ = true;
     }
-    template < typename FwdT >
-    void Buffer(FwdT begin, FwdT end) {
-        queue_.Buffer(begin, end);
-    }
-    void Stop() { //sync
-        queue_.PushFront(DataT());
-        taskFuture_.wait();
+    void Loop(const Callback& cback) { //sync
+        while(true) {
+            if(!cback(queue_.Pop())) break;
+        }
     }
     ~RAWInStream() {
         Stop();
     }
 private:
-    void Start(const char* URI) {
+    void Start(const char* URI, const Callback& cback,
+               int bufsize, int inactivityTimeout) { //async
         taskFuture_
-                = std::async(std::launch::async, CreateWorker(), URI);
+                = std::async(std::launch::async,
+                             CreateWorker(), URI, cback,
+                             bufsize, inactivityTimeout);
     }
-    std::function< void (const char*) > CreateWorker() const {
-        return [this](const char* URI) {
-            this->Execute(URI);
+    std::function< void (const char*, size_t, int) >
+    CreateWorker() const {
+        return [this](const char* URI,
+                      size_t bufsize,
+                      int inactivityTimeoutInSec) {
+            this->Execute(URI, bufsize, inactivityTimeoutInSec);
         };
     }
-    void Execute(const char* URI) {
+    void Execute(const char* URI,
+                 size_t bufferSize = 0x100000,
+                 int timeoutInSeconds = -1 /*not implemented*/ ) { //sync
         void* ctx = nullptr;
-        void* pub = nullptr;
-        std::tie(ctx, pub) = CreateZMQContextAndSocket(URI)
-        ///@todo add timeout support
-        while(true) {
-            const DataT d(std::move(queue_.Pop()));
-            std::vector<char> buffer(serialize_(d));
-            zmq_send(pub, buffer.data(), buffer.size(), 0);
-            if(buffer.empty()) break;
+        void* sub = nullptr;
+        std::tie(ctx, sub) = CreateZMQContextAndSocket();
+        std::vector< char > buffer(bufferSize);
+        while(stop_) {
+            int rc = zmq_recv(sub, buffer.data(), buffer.size(), 0);
+            if(rc < 0) throw std::runtime_error("Error receiving data");
+            if(rc == 0 || stop_) break;
+            queue_.push(deserialize_(buffer.data(), rc));
         }
-        CleanupZMQResources(ctx, pub);
     }
 private:
     void CleanupZMQResources(void* ctx, void* sub) {
@@ -99,5 +127,6 @@ private:
 private:
     SyncQueue< DataT > queue_;
     std::future< void > taskFuture_;
-    SerializerT serialize_;
+    DeSerializerT deserialize_ = DeSerializerT();
+    bool stop_ = false;
 };
