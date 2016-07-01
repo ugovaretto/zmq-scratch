@@ -40,6 +40,7 @@ struct DefaultSerializer {
 template < typename T >
 struct DefaultSerializer< std::vector< T > > {
     ByteArray operator()(const std::vector< T >& v) const {
+        if(v.empty()) return std::vector< char >();
         const size_t bytesize
                 = v.size() * sizeof(typename std::vector< T >::value_type);
         ByteArray r(v.size() * sizeof(typename std::vector< T >::value_type));

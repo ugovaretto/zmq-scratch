@@ -29,14 +29,14 @@ int main(int argc, char** argv) {
             os.Send(data);
             using namespace chrono;
             this_thread::sleep_for(
-                    duration_cast< nanoseconds >(seconds(1)));
+                    duration_cast< nanoseconds >(milliseconds(200)));
         }
     } else {
         int received = 0;
         RAWInStream< vector< char > > is(URI);
-        is.Loop([&received, numMessages](const vector<char> &) {
-            cout << ++received << endl;
-            return received < numMessages - 1;
+        is.Loop([&received, numMessages](const vector<char>& v) {
+            if(!v.empty()) cout << ++received << endl;
+            return !v.empty();
         });
     }
     return EXIT_SUCCESS;

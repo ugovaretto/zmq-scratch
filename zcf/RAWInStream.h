@@ -42,7 +42,8 @@ template < typename T >
 struct DefaultDeSerializer< std::vector< T > > {
     std::vector< T > operator()(const char* buf, int size) const {
         assert(buf);
-        assert(size > 0);
+        assert(size >= 0);
+        if(size == 0) return std::vector< T >();
         const T* begin = reinterpret_cast< const T *>(buf);
         const size_t sz = size / sizeof(T);
         return std::vector< T >(begin, begin + sz);
@@ -115,8 +116,8 @@ private:
                 if(retry > maxRetries && maxRetries > 0) stop_ = true;
                 continue;
             }
-            if(rc == 0) break;
             queue_.Push(deserialize_(buffer.data(), rc));
+            if(rc == 0) break;
         }
     }
 private:
