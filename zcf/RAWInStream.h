@@ -73,6 +73,7 @@ public:
         while(!stop_) {
             if(!cback(queue_.Pop())) break;
         }
+        taskFuture_.get();
     }
     ~RAWInStream() {
         Stop();
