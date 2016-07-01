@@ -20,6 +20,7 @@ int main(int, char**) {
         is.Loop([&received](const vector< char >& ) {
             cout << ++received << endl; return true; });
     };
+
     auto f = async(launch::async, receiver, URI);
 
     RAWOutStream< vector< char > > os(URI);
@@ -27,10 +28,9 @@ int main(int, char**) {
     for(int i = 0; i != 100; ++i) {
         os.Send(data);
         using namespace chrono;
-        this_thread::sleep_for(duration_cast< nanoseconds >(milliseconds(200)));
+        this_thread::sleep_for(duration_cast< nanoseconds >(seconds(1)));
     }
     os.Stop();
     f.wait();
-    assert(received == 100);
     return EXIT_SUCCESS;
 }

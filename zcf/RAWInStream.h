@@ -102,11 +102,13 @@ private:
         std::vector< char > buffer(bufferSize);
         const std::chrono::microseconds delay(500);
         const int maxRetries
-          = timeoutInSeconds
-            / std::chrono::duration_cast< std::chrono::seconds >(delay).count();
+          = timeoutInSeconds > 0 ? timeoutInSeconds
+            / std::chrono::duration_cast< std::chrono::seconds >(delay).count()
+            : 0;
         int retry = 0;
         while(!stop_) {
-            int rc = zmq_recv(sub, buffer.data(), buffer.size(), ZMQ_NOBLOCK);
+            const int rc
+                    = zmq_recv(sub, buffer.data(), buffer.size(), ZMQ_NOBLOCK);
             if(rc < 0) {
                 std::this_thread::sleep_for(delay);
                 ++retry;
@@ -130,10 +132,10 @@ private:
             if(!ctx) throw std::runtime_error("Cannot create ZMQ context");
             sub = zmq_socket(ctx, ZMQ_SUB);
             if(!sub) throw std::runtime_error("Cannot create ZMQ SUB socket");
-            if(!zmq_connect(sub, URI))
+            if(zmq_connect(sub, URI))
                 throw std::runtime_error("Cannot connect to "
                                          + std::string(URI));
-            if(!zmq_setsockopt(sub, ZMQ_SUBSCRIBE, "", 0))
+            if(zmq_setsockopt(sub, ZMQ_SUBSCRIBE, "", 0))
                 throw std::runtime_error("Cannot set ZMQ_SUBSCRIBE flag");
             return std::make_tuple(ctx, sub);
         } catch(const std::exception& e) {
