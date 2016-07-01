@@ -5,6 +5,8 @@
 #include <cstdlib>
 #include <chrono>
 #include <thread>
+#include <iostream>
+
 #include "RAWInStream.h"
 #include "RAWOutStream.h"
 
@@ -15,8 +17,8 @@ int main(int, char**) {
     int received = 0;
     auto receiver = [&received](const char* uri) {
         RAWInStream< vector< char > > is(uri);
-        is.Loop([&received](const vector< char >& data) { ++i; return true; });
-        cout << i << endl;
+        is.Loop([&received](const vector< char >& ) {
+            cout << ++received << endl; return true; });
     };
     auto f = async(launch::async, receiver, URI);
 

@@ -9,9 +9,9 @@
 #include <chrono>
 //#include <cinttypes>
 #include <vector>
-#include <type_traits>
 #include <cstring> //memmove
 #include <cerrno>
+#include <string>
 
 #include <zmq.h>
 
@@ -26,11 +26,8 @@ using ByteArray = std::vector< Byte >;
 //default serializer: data -> vector< char >
 //only POD types (copy with memmove) supported
 
-template < typename DataT, bool POD >
-struct DefaultSerializer;
-
 template < typename DataT >
-struct DefaultSerializer< DataT, true > {
+struct DefaultSerializer {
     ByteArray operator()(const DataT& d) const {
         ///@todo add Size and Copy(data, void*) customizations
         ByteArray v(sizeof(d));
@@ -41,20 +38,20 @@ struct DefaultSerializer< DataT, true > {
 };
 
 template < typename T >
-struct DefaultSerializer< std::vector< T >, true > {
+struct DefaultSerializer< std::vector< T > > {
     ByteArray operator()(const std::vector< T >& v) const {
         const size_t bytesize
-                = v.size() * sizeof(std::vector< T >::value_type);
-        ByteArray r(v.size() * sizeof(std::vector< T >::value_type));
+                = v.size() * sizeof(typename std::vector< T >::value_type);
+        ByteArray r(v.size() * sizeof(typename std::vector< T >::value_type));
         const Byte* begin = reinterpret_cast< const Byte* >(v.data());
-        memmove(r.data(), begin, begin + bytesize);
+        memmove(r.data(), begin, bytesize);
         return r;
     }
 };
 
 template< typename DataT,
           typename SerializerT
-            = DefaultSerializer< DataT, std::is_pod< DataT >::value > >
+            = DefaultSerializer< DataT > >
 class RAWOutStream {
 public:
     RAWOutStream() = delete;
@@ -76,9 +73,9 @@ public:
     ///       returning
     bool Stop(int timeoutSeconds = 4) { //sync
         queue_.PushFront(DataT());
-        const std::future_status =
+        const std::future_status fs =
                 taskFuture_.wait_for(std::chrono::seconds(timeoutSeconds));
-        return std::future_status == std::future_status_ready;
+        return fs == std::future_status::ready;
     }
     ~RAWOutStream() {
         Stop();
@@ -88,7 +85,7 @@ private:
         taskFuture_
                 = std::async(std::launch::async, CreateWorker(), URI);
     }
-    std::function< void (const char*) > CreateWorker() const {
+    std::function< void (const char*) > CreateWorker() {
         return [this](const char* URI) {
             this->Execute(URI);
         };
@@ -102,7 +99,7 @@ private:
             std::vector< char > buffer(serialize_(d));
             if(zmq_send(pub, buffer.data(), buffer.size(), 0) < 0) {
                 throw std::runtime_error("Error sending data - "
-                                         + strerror(errno));
+                                         + std::string(strerror(errno)));
             }
             //an empty message ends the loop and notifies the other endpoint
             //about the end of stream condition
@@ -127,7 +124,7 @@ private:
                 throw std::runtime_error("Cannot bind ZMQ socket");
             return std::make_tuple(ctx, pub);
         } catch(const std::exception& e) {
-            CleanupZQMResources(ctx, pub);
+            CleanupZMQResources(ctx, pub);
             throw e;
         }
         return std::make_tuple(nullptr, nullptr);

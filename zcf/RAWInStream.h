@@ -8,6 +8,8 @@
 #include <string>
 #include <future>
 #include <chrono>
+#include <cassert>
+#include <vector>
 
 #include <zmq.h>
 
@@ -22,11 +24,8 @@
 // //blocking call, will stop at the reception of an empty message
 // is.Start(subscribeURL, handleData, inactivityTimeoutInSec);
 
-template < typename DataT, bool POD >
-struct DefaultDeSerializer;
-
 template < typename DataT  >
-struct DefaultDeSerializer< DataT, true > {
+struct DefaultDeSerializer {
     DataT operator()(const char* buf, int size) const {
         assert(buf);
         assert(size > 0);
@@ -34,25 +33,25 @@ struct DefaultDeSerializer< DataT, true > {
         DataT d;
         if(sizeof(d) != size)
             throw std::domain_error("Wrong data size");
-        memmove(&d, ptr, size);
+        memmove(&d, buf, size);
         return d;
     }
 };
 
 template < typename T >
-struct DefaultDeSerializer< std::vector< T >, true > {
+struct DefaultDeSerializer< std::vector< T > > {
     std::vector< T > operator()(const char* buf, int size) const {
         assert(buf);
         assert(size > 0);
         const T* begin = reinterpret_cast< const T *>(buf);
-        const size_t size = size / sizeof(T);
-        return std::vector< T >(begin, begin + size);
+        const size_t sz = size / sizeof(T);
+        return std::vector< T >(begin, begin + sz);
     }
 };
 
 template< typename DataT,
           typename DeSerializerT
-            = DefaultDeSerializer< DataT, std::is_pod< DataT >::value > >
+            = DefaultDeSerializer< DataT > >
 class RAWInStream {
     ///invoked on each data frame received from publisher
     ///process data and return true; return false to stop receiving
@@ -61,11 +60,12 @@ public:
     RAWInStream() = delete;
     RAWInStream(const RAWInStream&) = delete;
     RAWInStream(RAWInStream&&) = default;
-    RAWInStream(const char *URI, const DeSerializerT& d = DeSerializerT())
+    RAWInStream(const char *URI, int buffersize = 0x100000,
+                int timeout = -1, const DeSerializerT& d = DeSerializerT())
             : deserialize_(d), stop_(false) {
-        Start();
+        Start(URI, buffersize, timeout);
     }
-    bool Stop() { //call from separate thread
+    void Stop() { //call from separate thread
         stop_ = true;
     }
     void Loop(const Callback& cback) { //sync
@@ -86,7 +86,7 @@ private:
                              bufsize, inactivityTimeout);
     }
     std::function< void (const char*, int, int) >
-    CreateWorker() const {
+    CreateWorker() {
         return [this](const char* URI,
                       int bufsize,
                       int inactivityTimeoutInSec) {
@@ -98,7 +98,7 @@ private:
                  int timeoutInSeconds = -1 ) { //sync
         void* ctx = nullptr;
         void* sub = nullptr;
-        std::tie(ctx, sub) = CreateZMQContextAndSocket();
+        std::tie(ctx, sub) = CreateZMQContextAndSocket(URI);
         std::vector< char > buffer(bufferSize);
         const std::chrono::microseconds delay(500);
         const int maxRetries
@@ -108,13 +108,13 @@ private:
         while(!stop_) {
             int rc = zmq_recv(sub, buffer.data(), buffer.size(), ZMQ_NOBLOCK);
             if(rc < 0) {
-                this_thread::sleep_for(delay);
+                std::this_thread::sleep_for(delay);
                 ++retry;
                 if(retry > maxRetries && maxRetries > 0) stop_ = true;
                 continue;
             }
             if(rc == 0) break;
-            queue_.push(deserialize_(buffer.data(), rc));
+            queue_.Push(deserialize_(buffer.data(), rc));
         }
     }
 private:
@@ -137,7 +137,7 @@ private:
                 throw std::runtime_error("Cannot set ZMQ_SUBSCRIBE flag");
             return std::make_tuple(ctx, sub);
         } catch(const std::exception& e) {
-            CleanupZQMResources(ctx, sub);
+            CleanupZMQResources(ctx, sub);
             throw e;
         }
         return std::make_tuple(nullptr, nullptr);
