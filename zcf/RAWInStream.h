@@ -22,13 +22,15 @@
 // //blocking call, will stop at the reception of an empty message
 // is.Start(subscribeURL, handleData, inactivityTimeoutInSec);
 
+template < typename DataT, bool POD >
+struct DefaultDeSerializer;
 
-template < typename DataT >
-struct DefaultDeSerializer {
+template < typename DataT  >
+struct DefaultDeSerializer< DataT, true > {
     DataT operator()(const char* buf, int size) const {
         assert(buf);
         assert(size > 0);
-        ///@todo add Size and Copy(void*, data) customizations
+        ///@todo add Size and Copy(void*, data) customizations for non-POD
         DataT d;
         if(sizeof(d) != size)
             throw std::domain_error("Wrong data size");
@@ -38,7 +40,7 @@ struct DefaultDeSerializer {
 };
 
 template < typename T >
-struct DefaultDeSerializer< std::vector< T > > {
+struct DefaultDeSerializer< std::vector< T >, true > {
     std::vector< T > operator()(const char* buf, int size) const {
         assert(buf);
         assert(size > 0);
@@ -49,9 +51,12 @@ struct DefaultDeSerializer< std::vector< T > > {
 };
 
 template< typename DataT,
-          typename DeSerializerT = DefaultDeSerializer< DataT > >
+          typename DeSerializerT
+            = DefaultDeSerializer< DataT, std::is_pod< DataT >::value > >
 class RAWInStream {
-    using Callback = std::function(const DataT&);
+    ///invoked on each data frame received from publisher
+    ///process data and return true; return false to stop receiving
+    using Callback = std::function< bool (const DataT&) >;
 public:
     RAWInStream() = delete;
     RAWInStream(const RAWInStream&) = delete;
@@ -72,23 +77,24 @@ public:
         Stop();
     }
 private:
-    void Start(const char* URI, const Callback& cback,
-               int bufsize, int inactivityTimeout) { //async
+    void Start(const char* URI,
+               int bufsize,
+               int inactivityTimeout) { //async
         taskFuture_
                 = std::async(std::launch::async,
-                             CreateWorker(), URI, cback,
+                             CreateWorker(), URI,
                              bufsize, inactivityTimeout);
     }
-    std::function< void (const char*, size_t, int) >
+    std::function< void (const char*, int, int) >
     CreateWorker() const {
         return [this](const char* URI,
-                      size_t bufsize,
+                      int bufsize,
                       int inactivityTimeoutInSec) {
             this->Execute(URI, bufsize, inactivityTimeoutInSec);
         };
     }
     void Execute(const char* URI,
-                 size_t bufferSize = 0x100000,
+                 int bufferSize = 0x100000,
                  int timeoutInSeconds = -1 ) { //sync
         void* ctx = nullptr;
         void* sub = nullptr;
@@ -97,7 +103,7 @@ private:
         const std::chrono::microseconds delay(500);
         const int maxRetries
           = timeoutInSeconds
-            / std::chrono::duration_cast< std::chrono::seconds>(delay).count();
+            / std::chrono::duration_cast< std::chrono::seconds >(delay).count();
         int retry = 0;
         while(!stop_) {
             int rc = zmq_recv(sub, buffer.data(), buffer.size(), ZMQ_NOBLOCK);
@@ -107,7 +113,7 @@ private:
                 if(retry > maxRetries && maxRetries > 0) stop_ = true;
                 continue;
             }
-            if(rc == 0 || stop_) break;
+            if(rc == 0) break;
             queue_.push(deserialize_(buffer.data(), rc));
         }
     }

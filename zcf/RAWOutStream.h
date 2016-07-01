@@ -7,49 +7,64 @@
 #include <tuple>
 #include <future>
 #include <chrono>
+//#include <cinttypes>
+#include <vector>
+#include <type_traits>
+#include <cstring> //memmove
+#include <cerrno>
 
 #include <zmq.h>
 
 #include "SyncQueue.h"
 
+using Byte = char;
+using ByteArray = std::vector< Byte >;
 
 //RAWOutStream< int > os;
 //os.Send(3);
 
+//default serializer: data -> vector< char >
+//only POD types (copy with memmove) supported
+
+template < typename DataT, bool POD >
+struct DefaultSerializer;
+
 template < typename DataT >
-struct DefaultSerializer {
-    std::vector< char > operator()(const DataT& d) const {
+struct DefaultSerializer< DataT, true > {
+    ByteArray operator()(const DataT& d) const {
         ///@todo add Size and Copy(data, void*) customizations
-        std::vector< char > v(sizeof(d));
-        const char* p = reinterpret_cast< const char* >(&d);
+        ByteArray v(sizeof(d));
+        const Byte* p = reinterpret_cast< const Byte* >(&d);
         std::copy(p, p + sizeof(p), v.begin());
         return v;
     }
 };
 
 template < typename T >
-struct DefaultSerializer< std::vector< T > > {
-    std::vector< char > operator()(const std::vector< T >& v) const {
+struct DefaultSerializer< std::vector< T >, true > {
+    ByteArray operator()(const std::vector< T >& v) const {
         const size_t bytesize
                 = v.size() * sizeof(std::vector< T >::value_type);
-        std::vector< char > r(v.size() * sizeof(std::vector< T >::value_type));
-        const char* begin = reinterpret_cast< const char* >(v.data());
+        ByteArray r(v.size() * sizeof(std::vector< T >::value_type));
+        const Byte* begin = reinterpret_cast< const Byte* >(v.data());
         memmove(r.data(), begin, begin + bytesize);
         return r;
     }
 };
 
-template< typename DataT, typename SerializerT = DefaultSerializer< DataT > >
+template< typename DataT,
+          typename SerializerT
+            = DefaultSerializer< DataT, std::is_pod< DataT >::value > >
 class RAWOutStream {
 public:
     RAWOutStream() = delete;
     RAWOutStream(const RAWOutStream&) = delete;
     RAWOutStream(RAWOutStream&&) = default;
-    RAWOutStream(const char *URI, const SerializerT& S = SerializerT())
+    RAWOutStream(const char* URI, const SerializerT& S = SerializerT())
             : serialize_(S) {
         Start(URI);
     }
-    void Send(const DataT &data) { //async
+    void Send(const DataT& data) { //async
         queue_.Push(data);
     }
     template < typename FwdT >
@@ -81,12 +96,16 @@ private:
     void Execute(const char* URI) {
         void* ctx = nullptr;
         void* pub = nullptr;
-        std::tie(ctx, pub) = CreateZMQContextAndSocket(URI)
-        ///@todo add timeout support
+        std::tie(ctx, pub) = CreateZMQContextAndSocket(URI);
         while(true) {
             const DataT d(std::move(queue_.Pop()));
-            std::vector<char> buffer(serialize_(d));
-            zmq_send(pub, buffer.data(), buffer.size(), 0);
+            std::vector< char > buffer(serialize_(d));
+            if(zmq_send(pub, buffer.data(), buffer.size(), 0) < 0) {
+                throw std::runtime_error("Error sending data - "
+                                         + strerror(errno));
+            }
+            //an empty message ends the loop and notifies the other endpoint
+            //about the end of stream condition
             if(buffer.empty()) break;
         }
         CleanupZMQResources(ctx, pub);
