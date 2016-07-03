@@ -14,7 +14,57 @@
 // auto requestHandler = [](int r){ return 2*i; };
 // rr.StartServicingRequests(requestHandler);
 
+//StartServicingRequest(reqHandler) {
+//  auto h = [reqHandler, this](const ReqType& r) {
+//      this->os_.Send(reqid, reqHandler(r));
+//  };
+//
+//
+//
+//
+//
+//
+//
+// }
 
+zcf::RPC::Proxy p = zcf::RPC::GetProxy("tcp://zrpc-server:5558",
+                                       "Directory Browser",
+                                       {{"initial directory", "$HOME"}});
+std::vector< string > lsresult = p["ls"]();
+
+
+
+
+#include <atomic>
+#include <cstdint>
+
+
+class AsyncReqStream {
+    using ReqID = int64_t;
+    using ReqType = int;
+public:
+    template < typename R,  typename... ArgsT >
+    void Req(ReqType rtype, const ArgsT&... args) {
+        const ReqID rid = index_.fetch_add(ReqID(1));
+        const std::vector< char > sbuffer = Serialize(rid, rtype, args...);
+        cbacks_[rid] = cback;
+        os_.Send(sbuffer);
+    }
+private:
+    void SetupReplyHandler() {
+        auto handler = [](const vector< char >& rep) {
+            //extract id
+            cbacks_[id](rep.data() + sizeof(ReqID));
+            //
+        }
+        auto loop = [this](auto cb) { this->is_.Loop(cp);};
+        replyTaskFuture_ = std::async(std::launch::async, loop, handler);
+    }
+private:
+    static std::atomic< ReqID  > index_ = ReqID(1);
+    RAWOutStream os_;
+    RAWInStream is_;
+};
 
 template< typename InT, typename OutT >
 class RAWInOutStream {
