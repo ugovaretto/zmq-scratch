@@ -2,16 +2,20 @@
 //
 // Created by Ugo Varetto on 6/30/16.
 //
-#include <cinttypes>
 #include <vector>
 #include <string>
 #include <type_traits>
 
+#ifdef ZCF_uint8_t
+#include <cinttypes>
 using Byte = std::uint8_t;
+#else
+using Byte = char;
+static_assert(sizeof(char) == 1, "sizeof(char) != 1");
+#endif
 using ByteArray = std::vector< Byte >;
 using ByteIterator = ByteArray::iterator;
 using ConstByteIterator = ByteArray::const_iterator;
-
 
 template < typename T >
 struct GetSerializer;
@@ -136,26 +140,6 @@ struct SerializeString {
     }
 };
 
-//template < typename...ArgsT >
-//struct Serialize< std::tuple< ArgsT... > > {
-//    using T = std::tuple< ArgsT... >;
-//    static ByteArray Pack(const T &d, ByteArray buf = ByteArray()) {
-//        const size_t sz = buf.size();
-//        buf.resize(buf.size() + sizeof(T));
-//        new (buf.data() + sz) T(d); //copy constructor
-//        return buf;
-//    }
-//    static ByteIterator Pack(const T &d, ByteIterator i) {
-//        new (i) T(d); //copy constructor
-//        return i + sizeof(d);
-//    }
-//    static ConstByteIterator UnPack(ConstByteIterator i, T& d) {
-//        d = *reinterpret_cast< const T* >(&*i); //assignment operator
-//        return i + sizeof(T);
-//    }
-//};
-
-
 // GetSerializer
 template < typename T >
 struct GetSerializer< std::vector< T > > {
@@ -232,3 +216,23 @@ struct GetSerializer< volatile std::tuple< ArgsT... > > {
             SerializePOD< std::tuple< ArgsT... > >,
             Serialize< std::tuple< ArgsT... > > >::type;
 };
+
+//Serializer/DeSerializer adapters to work with RAWI/OStreams
+template < typename T >
+struct SerializerInstance {
+    ByteArray operator()(const T& d, ByteArray ba = ByteArray()) const {
+        return GetSerializer< T >::Type::Pack(d, ba);
+    }
+};
+
+///@todo change after changing RAWInStream deserialization code
+///which requires to explicitly pass a size parameter
+template < typename T >
+struct DeSerializerInstance {
+    T operator()(ConstByteIterator bi, size_t /*size*/ = 0) const {
+        T d;
+        GetSerializer< T >::Type::UnPack(bi, d);
+        return d;
+    }
+};
+
