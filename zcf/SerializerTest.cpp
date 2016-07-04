@@ -6,14 +6,18 @@
 #include <cstdlib>
 #include <string>
 #include <vector>
+#include <iostream>
+
+#if LOG__
+#include <algorithm>
+#include <iterator>
+#endif
 
 #include "Serialize.h"
 
 using namespace std;
 
 int main(int, char**) {
-
-
     const int intOut = 3;
     using IntSerializer = GetSerializer< decltype(intOut) >::Type;
     static_assert(std::is_same< IntSerializer, SerializePOD< int > >::value,
@@ -30,7 +34,23 @@ int main(int, char**) {
     const ByteArray voutBuf = VIntSerializer::Pack(vintOut);
     vector< int > vintIn;
     VIntSerializer::UnPack(begin(voutBuf), vintIn);
+#if LOG__
+    cout << endl;
+    copy(vintIn.begin(), vintIn.end(), ostream_iterator< int >(cout, " "));
+    cout << endl;
+#endif
+    assert(vintIn.size() == vintOut.size());
     assert(vintIn == vintOut);
+
+    const string outstring = "outstring";
+    using StringSerializer = GetSerializer< decltype(outstring) >::Type;
+    static_assert(std::is_same< StringSerializer, SerializeString >::value,
+                  "Not SerializeString type");
+    const ByteArray soutBuf = StringSerializer::Pack(outstring);
+    string instring;
+    StringSerializer::UnPack(begin(soutBuf), instring);
+    assert(instring.size() == outstring.size());
+    assert(instring == outstring);
 
     return EXIT_SUCCESS;
 }

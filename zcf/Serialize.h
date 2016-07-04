@@ -63,7 +63,7 @@ struct SerializeVectorPOD {
         const ST s = d.size();
         buf.resize(buf.size() + sizeof(T) * d.size() + sizeof(ST));
         memmove(buf.data() + sz, &s, sizeof(s));
-        memmove(buf.data() + sz + sizeof(ST), &d, sizeof(T) * d.size());
+        memmove(buf.data() + sz + sizeof(s), d.data(), sizeof(T) * d.size());
         return buf;
     }
     static ByteIterator Pack(const std::vector< T > &d, ByteIterator i) {
@@ -165,7 +165,6 @@ struct GetSerializer{
                                    SerializePOD< NCV >,
                                    Serialize< NCV > >::type;
 };
-
 
 template <>
 struct GetSerializer< std::string > {
