@@ -16,7 +16,7 @@ using ConstByteIterator = ByteArray::const_iterator;
 template < typename T >
 struct GetSerializer;
 
-//definitions
+//Serializer definitions
 template < typename T >
 struct SerializePOD {
     static ByteArray Pack(const T &d, ByteArray buf = ByteArray()) {
@@ -136,10 +136,27 @@ struct SerializeString {
     }
 };
 
+//template < typename...ArgsT >
+//struct Serialize< std::tuple< ArgsT... > > {
+//    using T = std::tuple< ArgsT... >;
+//    static ByteArray Pack(const T &d, ByteArray buf = ByteArray()) {
+//        const size_t sz = buf.size();
+//        buf.resize(buf.size() + sizeof(T));
+//        new (buf.data() + sz) T(d); //copy constructor
+//        return buf;
+//    }
+//    static ByteIterator Pack(const T &d, ByteIterator i) {
+//        new (i) T(d); //copy constructor
+//        return i + sizeof(d);
+//    }
+//    static ConstByteIterator UnPack(ConstByteIterator i, T& d) {
+//        d = *reinterpret_cast< const T* >(&*i); //assignment operator
+//        return i + sizeof(T);
+//    }
+//};
 
-template < typename T >
-struct InvalidSerializer;
 
+// GetSerializer
 template < typename T >
 struct GetSerializer< std::vector< T > > {
     using NCV = typename std::remove_cv< T >::type;
@@ -181,7 +198,37 @@ struct GetSerializer< volatile std::string > {
     using Type = SerializeString;
 };
 
-//template < typename...ArgsT >
-//struct GetSerializer< std::tuple< ArgsT... > > {
-//
-//};
+
+template < typename H, typename...T >
+struct And {
+    static const bool Value = H::value && And< T... >::Value;
+};
+
+template < typename T >
+struct And< T > {
+    static const bool Value = T::value;
+};
+
+template < typename...ArgsT >
+struct GetSerializer< std::tuple< ArgsT... > > {
+    using Type =
+        typename std::conditional< And< std::is_pod< ArgsT >... >::Value,
+                                   SerializePOD< std::tuple< ArgsT... > >,
+                                   Serialize< std::tuple< ArgsT... > > >::type;
+};
+
+template < typename...ArgsT >
+struct GetSerializer< const std::tuple< ArgsT... > > {
+    using Type =
+    typename std::conditional< And< std::is_pod< ArgsT >... >::Value,
+            SerializePOD< std::tuple< ArgsT... > >,
+            Serialize< std::tuple< ArgsT... > > >::type;
+};
+
+template < typename...ArgsT >
+struct GetSerializer< volatile std::tuple< ArgsT... > > {
+    using Type =
+    typename std::conditional< And< std::is_pod< ArgsT >... >::Value,
+            SerializePOD< std::tuple< ArgsT... > >,
+            Serialize< std::tuple< ArgsT... > > >::type;
+};
