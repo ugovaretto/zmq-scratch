@@ -80,9 +80,9 @@ int main(int, char**) {
     //Non-POD vector
     const vector< string > vsout = {"1", "2", "three"};
     using VSSerializer = GetSerializer< vector< string > >::Type;
-//    static_assert(std::is_same< VSSerializer,
-//                                SerializeVector< VST > >::value,
-//                  "Not SerializeVector type");
+    static_assert(std::is_same< VSSerializer,
+                                SerializeVector< string > >::value,
+                  "Not SerializeVector type");
     const ByteArray vsoutBuf = VSSerializer::Pack(vsout);
     vector< string > vsin;
     VSSerializer::UnPack(begin(vsoutBuf), vsin);

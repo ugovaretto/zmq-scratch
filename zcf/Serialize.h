@@ -239,3 +239,19 @@ struct DeSerializerInstance {
     }
 };
 
+template < typename T >
+ByteArray  Pack(const T& d, ByteArray ba = ByteArray()) {
+    return GetSerializer< T >::Type::Pack(d, ba);
+}
+
+template < typename T >
+T UnPack(ConstByteIterator bi) {
+    T d;
+    GetSerializer< T >::Type::UnPack(bi, d);
+    return d;
+}
+
+template < typename T >
+ConstByteIterator UnPack(ConstByteIterator bi, T& d) {
+    return GetSerializer< T >::Type::UnPack(bi, d);
+}
