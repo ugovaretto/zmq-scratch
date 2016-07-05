@@ -9,6 +9,8 @@
 #include <iostream>
 #include <tuple>
 
+//#define LOG__ 1
+
 #if LOG__
 #include <algorithm>
 #include <iterator>
@@ -75,5 +77,20 @@ int main(int, char**) {
     tuple< int, double, float > pinTuple;
     PODTupleSerializer::UnPack(begin(ptoutBuf), pinTuple);
     assert(pinTuple == poutTuple);
+    //Non-POD vector
+    const vector< string > vsout = {"1", "2", "three"};
+    using VSSerializer = GetSerializer< vector< string > >::Type;
+//    static_assert(std::is_same< VSSerializer,
+//                                SerializeVector< VST > >::value,
+//                  "Not SerializeVector type");
+    const ByteArray vsoutBuf = VSSerializer::Pack(vsout);
+    vector< string > vsin;
+    VSSerializer::UnPack(begin(vsoutBuf), vsin);
+#if LOG__
+    cout << endl;
+    copy(vsin.begin(), vsin.end(), ostream_iterator< string >(cout, "\n"));
+    cout << endl;
+#endif
+    assert(vsin == vsout);
     return EXIT_SUCCESS;
 }

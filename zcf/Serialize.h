@@ -88,15 +88,17 @@ struct SerializeVectorPOD {
 
 template < typename T >
 struct SerializeVector {
-    using ST = typename std::vector< T >::size_type;
-    using TS = typename GetSerializer< T >::Type;
+    using ST = typename std::vector<
+            typename std::remove_cv< T >::type >::size_type;
+    using TS = typename GetSerializer<
+            typename std::remove_cv< T >::type >::Type;
     static ByteArray Pack(const std::vector< T >& d,
                           ByteArray buf = ByteArray()) {
         const size_t sz = buf.size();
-        const ST s = d.size();
-        buf.resize(buf.size() + sizeof(T) * d.size() + sizeof(ST));
+        const size_t s = d.size();
+        buf.resize(buf.size() + sizeof(s));
         memmove(buf.data() + sz, &s, sizeof(s));
-        for(decltype(cbegin(d)) i = cbegin(d); i != cend(d); ++i) {
+        for(decltype(d.cbegin()) i = d.cbegin(); i != d.cend(); ++i) {
             buf = TS::Pack(*i, buf);
         }
         return buf;
@@ -112,6 +114,7 @@ struct SerializeVector {
     static ConstByteIterator UnPack(ConstByteIterator bi, std::vector< T >& d) {
         ST s = 0;
         memmove(&s, &*bi, sizeof(s));
+        bi += sizeof(s);
         d.reserve(s);
         for(ST  i = 0; i != s; ++i) {
             T data;
