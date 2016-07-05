@@ -21,6 +21,15 @@ void printfoo(tuple< int, int > t, IndexSequence< s... > ) {
     cout << foo(get<s>(t)...) << endl;
 }
 
+
+template < typename R, int...Ints, typename...ArgsT >
+R Call(std::function< R (ArgsT...) > f,
+       std::tuple< ArgsT... > args, const IndexSequence< Ints... >& ) {
+    return f(std::get< Ints >(args)...);
+};
+
+
+
 //template < int i, int Size >
 //struct MakeIndexSequence : {
 //    using type = MakeIndexSequence< i - 1, size >::type;
@@ -56,7 +65,7 @@ int main(int, char**) {
     auto i12 = make_tuple(1, 3);
     printfoo(i12,
              MakeIndexSequence< tuple_size< decltype(i12) >::value >::Type());
-
+    cout << Call(std::function< int (int) >(C()), make_tuple(19), MakeIndexSequence< 1 >::Type()) << endl << endl;
     C c;
     double d = c(3);
     return EXIT_SUCCESS;
