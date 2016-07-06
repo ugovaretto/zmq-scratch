@@ -84,21 +84,41 @@ struct MakeIndexSequence< 0, Ints... >  {
     using Type = IndexSequence< Ints... >;
 };
 
-template < typename R, typename...FArgsT, int...Ints, typename...ArgsT >
-R CallHelper(std::function< R (FArgsT...) > f,
+template < typename R, int...Ints, typename...ArgsT >
+R CallHelper(std::function< R (ArgsT...) > f,
              std::tuple< ArgsT... > args,
              const IndexSequence< Ints... >& ) {
     return f(std::get< Ints >(args)...);
 };
 
 
-template < typename R, typename...FArgsT, int...Ints, typename...ArgsT >
-R Call(std::function< R (FArgsT...) > f,
+template < typename R,  int...Ints, typename...ArgsT >
+R Call(std::function< R (ArgsT...) > f,
        std::tuple< ArgsT... > args) {
     return CallHelper(f, args,
                       typename MakeIndexSequence< sizeof...(ArgsT) >::Type());
 };
 
+template < typename R, int...Ints, typename...ArgsT >
+R MoveCallHelper(std::function< R (ArgsT...) > f,
+             std::tuple< ArgsT... >&& args,
+             const IndexSequence< Ints... >& ) {
+    return f(std::move(std::get< Ints >(args))...);
+};
+
+
+template < typename R,  int...Ints, typename...ArgsT >
+R MoveCall(std::function< R (ArgsT...) > f,
+       std::tuple< ArgsT... >&& args) {
+    return MoveCallHelper(f, std::move(args),
+                      typename MakeIndexSequence< sizeof...(ArgsT) >::Type());
+};
+
+template < typename T >
+struct RemoveAll {
+    using Type = typename std::remove_cv<
+            typename std::remove_reference< T >::type >::type;
+};
 
 //==============================================================================
 //METHOD
@@ -115,43 +135,43 @@ struct EmptyMethod : IMethod {
 };
 
 
-//template < typename R, typename...ArgsT >
-//class Method : public IMethod {
-//public:
-//    Method() = default;
-//    Method(const std::function< R (ArgsT...) >& f) : f_(f) {}
-//    Method(const Method&) = default;
-//    Method* Clone() const { return new Method< R, ArgsT... >(*this); }
-//    ByteArray Invoke(const ByteArray& args) {
-//        std::tuple<
-//                    typename std::remove_reference< typename
-//                        std::remove_cv< ArgsT >::type >::type... > params =
-//                UnPack< std::tuple<
-//                                    typename std::remove_reference< typename
-//                                    std::remove_cv< ArgsT >::type >::type... > >(begin(args));
-//        R ret = Call(f_, params);
-//        return Pack(ret);
-//    }
-//private:
-//    std::function< R (ArgsT...) > f_;
-//};
-//
-//template < typename...ArgsT >
-//class Method< void, ArgsT... > : public IMethod {
-//public:
-//    Method() = default;
-//    Method(const std::function< void (ArgsT...) >& f) : f_(f) {}
-//    Method(const Method&) = default;
-//    Method* Clone() const { return Method(*this); }
-//    ByteArray Invoke(const ByteArray& args) {
-//        std::tuple< ArgsT... > params =
-//                UnPack< std::tuple< ArgsT... > >(begin(args));
-//        return ByteArray();
-//    }
-//private:
-//    std::function< void (ArgsT...) > f_;
-//};
+template < typename R, typename...ArgsT >
+class Method : public IMethod {
+public:
+    Method() = default;
+    Method(const std::function< R (ArgsT...) >& f) : f_(f) {}
+    Method(const Method&) = default;
+    Method* Clone() const { return new Method< R, ArgsT... >(*this); }
+    ByteArray Invoke(const ByteArray& args) {
+        //std::tuple< typename RemoveAll< ArgsT >::Type... > params =
+        std::tuple< ArgsT... > params =
+                UnPack< std::tuple<
+                        typename RemoveAll< ArgsT >::Type... > >(begin(args));
+        R ret = MoveCall(f_, std::move(params));
+        return Pack(ret);
+    }
+private:
+    std::function< R (ArgsT...) > f_;
+};
 
+template < typename...ArgsT >
+class Method< void, ArgsT... > : public IMethod {
+public:
+    Method() = default;
+    Method(const std::function< void (ArgsT...) >& f) : f_(f) {}
+    Method(const Method&) = default;
+    Method* Clone() const { return new Method< void, ArgsT... >(*this); }
+    ByteArray Invoke(const ByteArray& args) {
+        //std::tuple< typename RemoveAll< ArgsT >::Type... > params =
+        std::tuple< ArgsT... > params =
+                UnPack< std::tuple<
+                        typename RemoveAll< ArgsT >::Type... > >(begin(args));
+        MoveCall(f_, std::move(params));
+        return ByteArray();
+    }
+private:
+    std::function< void (ArgsT...) > f_;
+};
 
 class MethodImpl {
 public:
@@ -163,9 +183,14 @@ public:
         method_.reset(mi.method_->Clone());
         return *this;
     }
-//    template < typename R, typename...ArgsT >
-//    MethodImpl(const Method< R, ArgsT... >& m)
-//            : method_(new Method< R, ArgsT... >(m)) {}
+    template < typename R, typename...ArgsT >
+    MethodImpl(const Method< R, ArgsT... >& m)
+            : method_(new Method< R, ArgsT... >(m)) {}
+    template < typename R, typename...ArgsT >
+    MethodImpl(const std::function< R (ArgsT...) >& f)
+            : MethodImpl(Method< R, typename RemoveAll< ArgsT >::Type...>(f))
+    {};
+
     ByteArray Invoke(const ByteArray& args) {
         return method_->Invoke(args);
     }
@@ -189,10 +214,10 @@ public:
     void Add(int id, const MethodImpl& mi) {
         methods_[id] = mi;
     }
-//    template < typename R, typename...ArgsT >
-//    void Add(int id, const std::function< R (ArgsT...) >& f) {
-//        Add(id, MakeMethod(f));
-//    };
+    template < typename R, typename...ArgsT >
+    void Add(int id, const std::function< R (ArgsT...) >& f) {
+        Add(id, MethodImpl(f));
+    };
     ByteArray Invoke(int reqid, const ByteArray& args) {
         return methods_[reqid].Invoke(args);
     }
@@ -370,12 +395,13 @@ class ServiceProxy {
 public:
 
     struct ByteArrayWrapper {
-        ByteArrayWrapper(ByteArray&& ba) : ba_(std::move(ba)) {}
+        ByteArrayWrapper(const ByteArray& ba) : ba_(std::cref(ba)) {}
+        ByteArrayWrapper(const ByteArrayWrapper&) = default;
         template < typename T >
         operator T() const {
             return To< T >(ba_);
         }
-        ByteArray ba_;
+        std::reference_wrapper< const ByteArray > ba_;
     };
 
     class RemoteInvoker {
@@ -384,13 +410,12 @@ public:
                 sp_(sp), reqid_(reqid) { }
 
         template<typename...ArgsT>
-        ByteArrayWrapper operator()(ArgsT...args) {
+        const ByteArrayWrapper operator()(ArgsT...args) {
             sp_->sendBuf_.resize(0);
-            sp_->recvBuf_.resize(0);
             sp_->sendBuf_ = Pack(std::make_tuple(args...),
                                  std::move(sp_->sendBuf_));
             sp_->Send(reqid_);
-            return std::move(sp_->recvBuf_);
+            return ByteArrayWrapper(sp_->recvBuf_);
         }
     private:
         ServiceProxy* sp_;
@@ -412,7 +437,6 @@ public:
     template < typename R, typename...ArgsT >
     R Request(int reqid, ArgsT...args) {
         sendBuf_.resize(0);
-        //recvBuf_.resize(0);
         sendBuf_ = Pack(std::make_tuple(args...), std::move(sendBuf_));
         Send(reqid);
         return UnPack< R >(begin(recvBuf_));
@@ -465,15 +489,16 @@ private:
 //DRIVER
 //==============================================================================
 using namespace std;
+
 int main(int, char**) {
+
     //FileService
-    enum {FS_LS = 1};
     ServiceImpl si;
     struct FSMethod : IMethod {
         ByteArray Invoke(const ByteArray& args) {
             tuple< string > arg = To< tuple< string > >(args);
             const string dir = get< 0 >(arg);
-            Log("service>> args: " + dir);
+            Log("method>> args: " + dir);
             const std::vector< string > rep = {dir + "/1", dir + "/2"};
             return Pack(rep);
         }
@@ -481,7 +506,16 @@ int main(int, char**) {
             return new FSMethod;
         }
     };
+    //Sum
+    //Method< int, int, int > sum([](const int& i1, int i2) { return i1 + i2;});
+    MethodImpl mi(std::function< int (const int&, const int&) >(
+            [](const int& i1, const int& i2) -> int { return i1 + i2;}));
+
+    enum {FS_LS = 1, SUM};
     si.Add(FS_LS, MethodImpl(new FSMethod));
+    //si.Add(SUM, mi);
+    si.Add(SUM, std::function< int (const int&, const int&) >(
+            [](const int& i1, const int& i2) -> int { return i1 + i2;}));
     Service fs("ipc://file-service", si);
     //Add to service manager
     ServiceManager sm;
@@ -491,10 +525,15 @@ int main(int, char**) {
 
     //Client
     ServiceProxy sp("ipc://service-manager", "file service");
-    //Execute remote method
-    vector< string > lsresult = sp.Request< decltype(lsresult) >(FS_LS, string("mydir"));
+    //Execute remote methods
+    const vector< string > lsresult =
+            sp.Request< decltype(lsresult) >(FS_LS, string("mydir"));
     copy(begin(lsresult), end(lsresult),
          ostream_iterator< string >(cout, "\n"));
+    const int sumresult = sp.Request< int >(SUM, 5, 4);
+    int ss = sp[SUM](7,4);
+    cout << ss << endl;
+    cout << sumresult << endl;
     sm.Stop();
     return EXIT_SUCCESS;
 }

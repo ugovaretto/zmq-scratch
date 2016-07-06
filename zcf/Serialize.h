@@ -220,6 +220,16 @@ struct GetSerializer< volatile std::tuple< ArgsT... > > {
             Serialize< std::tuple< ArgsT... > > >::type;
 };
 
+//prevent from automatically serialize raw pointers
+template < typename T >
+struct GetSerializer< T* >;
+
+template < typename T >
+struct GetSerializer< const T* >;
+
+template < typename T >
+struct GetSerializer< volatile T* >;
+
 //Serializer/DeSerializer adapters to work with RAWI/OStreams
 template < typename T >
 struct SerializerInstance {
@@ -246,9 +256,10 @@ ByteArray  Pack(const T& d, ByteArray ba = ByteArray()) {
 
 template < typename T >
 typename std::remove_reference<
-        typename std::remove_cv< T >::type >::type UnPack(ConstByteIterator bi) {
+        typename std::remove_cv< T >::type >::type
+UnPack(ConstByteIterator bi) {
     using U = typename std::remove_reference<
-            typename std::remove_cv< T >::type >::type;
+                 typename std::remove_cv< T >::type >::type;
     U d;
     GetSerializer< U >::Type::UnPack(bi, d);
     return d;
