@@ -2,6 +2,21 @@
 // Created by Ugo Varetto on 7/4/16.
 //
 
+///@todo Make type safe: no check is performed when de-serializing
+///consider optional addition of type information for each serialized type
+///return method signature and description from service
+///add ability to interact with service manager asking for supported services
+///consider having service manager select URI based on workload, can be local
+///or remote, in this case a protocol must be implemented to allow service
+///managers to talk to each other and exchange information about supported
+///services and current workload
+
+///@todo need a way to derermine if service is under stress e.g. interval
+///between end of request and start of new one
+
+///@todo parameterize buffer size, timeout and option to send buffer size along
+///data to allow for dynamic buffer resize
+
 #include <memory>
 #include <string>
 #include <iterator>
@@ -12,6 +27,7 @@
 #include <cstdlib>
 #include <zmq.h>
 #include <iostream>
+#include <cassert>
 
 #include "Serialize.h"
 #include "SyncQueue.h"
@@ -276,8 +292,12 @@ private:
 
 class ServiceProxy {
 public:
-    ServiceProxy(const char* uri, const char* service) {
-        Connect(GetServiceURI(uri));
+    ServiceProxy() = delete;
+    ServiceProxy(const ServiceProxy&) = delete;
+    ServiceProxy(ServiceProxy&&) = default;
+    ServiceProxy& operator=(const ServiceProxy&) = delete;
+    ServiceProxy(const char* serviceManagerURI, const char* serviceName) {
+        Connect(GetServiceURI(serviceManagerURI, serviceName));
     }
     RemoteInvoker operator[](int id) {
         return RemoteInvoker(this, id);
@@ -291,19 +311,27 @@ public:
         return UnPack< R >(begin(recvBuf_));
 
     };
+    ~ServiceProxy() {
+        ZCleanup(ctx_, serviceSocket_);
+    }
 private:
     struct ByteArrayWrapper {
         ByteArrayWrapper(ByteArray&& ba) : ba_(std::move(ba)) {}
+        template < typename T >
+        operator T() {
+            T d;
+            UnPack(begin(ba_), d;
+            return d;
+        }
         ByteArray ba_;
     };
-
     template < typename R >
     inline R& operator=(R& r, const ByteArrayWrapper& baw) {
         UnPack(begin(baw.ba_), r);
         return r;
     }
-
     friend class RemoteInvoker {
+    public:
         RemoteInvoker(ServiceProxy* sp, int reqid) :
                 sp_(sp), reqid_(reqid) {}
         template < typename...ArgsT >
@@ -314,13 +342,35 @@ private:
             Send();
             return recvBuf_;
         }
+    private:
         ServiceProxy sp_;
         int reqid_;
     };
+    std::string GetServiceURI(const char* serviceManagerURI,
+                              const char* serviceName) {
+        void* tmpCtx = zmq_ctx_new();
+        assert(tmpCtx);
+        void* tmpSocket = zmq_socket(tmpCtx, ZMQ_REQ);
+        assert(tmpSocket);
+        ZCheck(zmq_connect(tmpSocket, serviceManagerURI));
+        ZCheck(zmq_send(tmpSocket, serviceName, strlen(serviceName), 0));
+        ByteArray rep(0x10000);
+        int rc = zmq_recv(tmpSocket, rep.data(), rep.size(), 0);
+        ZCheck(rc);
+        ZCleanup(tmpCtx, tmpSocket);
+        return std::string(begin(rep), begin(rep) + rc);
+    }
+    void Connect(const std::string& serviceURI) {
+        ctx_ = zmq_ctx_new();
+        assert(ctx_);
+        serviceSocket_ = zmq_socket(ctx_, ZMQ_REQ);
+        assert(serviceSocket_);
+        ZCheck(zmq_connect(serviceSocket_, serviceURI.c_str()));
+    }
 private:
     void Send() {
-        zmq_send(serviceSocket_, sendBuf_.data(), sendBuf_.size(), 0);
-        zmq_recv(serviceSocket_, recvBuf_.data(), recvBuf_.size(), 0);
+        ZCheck(zmq_send(serviceSocket_, sendBuf_.data(), sendBuf_.size(), 0));
+        ZCheck(zmq_recv(serviceSocket_, recvBuf_.data(), recvBuf_.size(), 0));
     }
 private:
     ByteArray sendBuf_;
@@ -332,29 +382,24 @@ private:
 
 //------------------------------------------------------------------------------
 
-//FileService
-
-enum {FS_LS = 1};
-
-//
-
 using namespace std;
-
-
 int main(int, char**) {
+    //FileService
+    enum {FS_LS = 1};
     ServiceImpl si;
     si.Add(FS_LS, MakeMethod([](const std::string& dir) {
         return std::vector< string >{"1", "2", "three"};}));
     Service fs("ipc://file-service", si);
+    //Add to service manager
     ServiceManager sm;
     sm.Add("file service", fs);
-
+    //Start service manager in separate thread
     auto s = async(launch::async, sm.Start("ipc://service-manager"));
 
+    //Client
     ServiceProxy sp("ipc://service-manager", "file service");
-
+    //Execute remote method
     vector< string > lsresult = sp[FS_LS]("/");
-
     copy(begin(lsresult), end(lsresult),
          ostream_iterator< string >(cout, "\n"));
 
