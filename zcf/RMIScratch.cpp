@@ -4,8 +4,14 @@
 
 //Remote method invocation implementation
 
+///@todo resize receive buffer before and after recv
 
-///@todo disable serialization of pointers!!!
+///@todo error handling
+
+///@todo should I make RemobeInvoker accessible ? In this case the buffer
+///has to be copied
+
+///@todo typedef req id
 
 ///@todo Make type safe: no check is performed when de-serializing
 ///consider optional addition of type information for each serialized type
@@ -392,8 +398,7 @@ private:
 //==============================================================================
 ///@todo should I call it ServiceClient instead of ServiceProxy ?
 class ServiceProxy {
-public:
-
+private:
     struct ByteArrayWrapper {
         ByteArrayWrapper(const ByteArray& ba) : ba_(std::cref(ba)) {}
         ByteArrayWrapper(const ByteArrayWrapper&) = default;
