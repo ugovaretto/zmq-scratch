@@ -4,6 +4,9 @@
 
 //Remote method invocation implementation
 
+
+///@todo disable serialization of pointers!!!
+
 ///@todo Make type safe: no check is performed when de-serializing
 ///consider optional addition of type information for each serialized type
 ///return method signature and description from service
@@ -42,6 +45,13 @@
 //==============================================================================
 //UTILITY
 //==============================================================================
+#define LOG__
+
+void Log(const std::string& msg) {
+#ifdef LOG__
+    std::cout << msg << std::endl;
+#endif
+}
 
 //------------------------------------------------------------------------------
 //ZEROMQ ERROR HANDLERS
@@ -105,56 +115,57 @@ struct EmptyMethod : IMethod {
 };
 
 
-template < typename R, typename...ArgsT >
-class Method : public IMethod {
-public:
-    Method() = default;
-    Method(const std::function< R (ArgsT...) >& f) : f_(f) {}
-    Method(const Method&) = default;
-    Method* Clone() const { return new Method< R, ArgsT... >(*this); }
-    ByteArray Invoke(const ByteArray& args) {
-        std::tuple<
-                    typename std::remove_reference< typename
-                        std::remove_cv< ArgsT >::type >::type... > params =
-                UnPack< std::tuple<
-                                    typename std::remove_reference< typename
-                                    std::remove_cv< ArgsT >::type >::type... > >(begin(args));
-        R ret = Call(f_, params);
-        return Pack(ret);
-    }
-private:
-    std::function< R (ArgsT...) > f_;
-};
-
-template < typename...ArgsT >
-class Method< void, ArgsT... > : public IMethod {
-public:
-    Method() = default;
-    Method(const std::function< void (ArgsT...) >& f) : f_(f) {}
-    Method(const Method&) = default;
-    Method* Clone() const { return Method(*this); }
-    ByteArray Invoke(const ByteArray& args) {
-        std::tuple< ArgsT... > params =
-                UnPack< std::tuple< ArgsT... > >(begin(args));
-        return ByteArray();
-    }
-private:
-    std::function< void (ArgsT...) > f_;
-};
+//template < typename R, typename...ArgsT >
+//class Method : public IMethod {
+//public:
+//    Method() = default;
+//    Method(const std::function< R (ArgsT...) >& f) : f_(f) {}
+//    Method(const Method&) = default;
+//    Method* Clone() const { return new Method< R, ArgsT... >(*this); }
+//    ByteArray Invoke(const ByteArray& args) {
+//        std::tuple<
+//                    typename std::remove_reference< typename
+//                        std::remove_cv< ArgsT >::type >::type... > params =
+//                UnPack< std::tuple<
+//                                    typename std::remove_reference< typename
+//                                    std::remove_cv< ArgsT >::type >::type... > >(begin(args));
+//        R ret = Call(f_, params);
+//        return Pack(ret);
+//    }
+//private:
+//    std::function< R (ArgsT...) > f_;
+//};
+//
+//template < typename...ArgsT >
+//class Method< void, ArgsT... > : public IMethod {
+//public:
+//    Method() = default;
+//    Method(const std::function< void (ArgsT...) >& f) : f_(f) {}
+//    Method(const Method&) = default;
+//    Method* Clone() const { return Method(*this); }
+//    ByteArray Invoke(const ByteArray& args) {
+//        std::tuple< ArgsT... > params =
+//                UnPack< std::tuple< ArgsT... > >(begin(args));
+//        return ByteArray();
+//    }
+//private:
+//    std::function< void (ArgsT...) > f_;
+//};
 
 
 class MethodImpl {
 public:
     MethodImpl() : method_(new EmptyMethod) {}
+    MethodImpl(IMethod* pm) : method_(pm) {}
     MethodImpl(const MethodImpl& mi) :
             method_(mi.method_ ? mi.method_->Clone() : nullptr) {}
     MethodImpl& operator=(const MethodImpl& mi) {
         method_.reset(mi.method_->Clone());
         return *this;
     }
-    template < typename R, typename...ArgsT >
-    MethodImpl(const Method< R, ArgsT... >& m)
-            : method_(new Method< R, ArgsT... >(m)) {}
+//    template < typename R, typename...ArgsT >
+//    MethodImpl(const Method< R, ArgsT... >& m)
+//            : method_(new Method< R, ArgsT... >(m)) {}
     ByteArray Invoke(const ByteArray& args) {
         return method_->Invoke(args);
     }
@@ -162,10 +173,10 @@ private:
     std::unique_ptr< IMethod > method_;
 };
 
-template < typename R, typename...ArgsT >
-MethodImpl MakeMethod(const std::function< R (ArgsT...) >& f) {
-    return MethodImpl(Method< R, ArgsT... >(f));
-};
+//template < typename R, typename...ArgsT >
+//MethodImpl MakeMethod(const std::function< R (ArgsT...) >& f) {
+//    return MethodImpl(Method< R, ArgsT... >(f));
+//};
 
 //==============================================================================
 //SERVICE
@@ -178,10 +189,10 @@ public:
     void Add(int id, const MethodImpl& mi) {
         methods_[id] = mi;
     }
-    template < typename R, typename...ArgsT >
-    void Add(int id, const std::function< R (ArgsT...) >& f) {
-        Add(id, MakeMethod(f));
-    };
+//    template < typename R, typename...ArgsT >
+//    void Add(int id, const std::function< R (ArgsT...) >& f) {
+//        Add(id, MakeMethod(f));
+//    };
     ByteArray Invoke(int reqid, const ByteArray& args) {
         return methods_[reqid].Invoke(args);
     }
@@ -221,6 +232,7 @@ public:
                 ZCheck(zmq_recv(r, 0, 0, 0));
                 int rc = zmq_recv(r, &reqid, sizeof(int), 0);
                 ZCheck(rc);
+                Log("service>> request id: " + std::to_string(reqid));
                 int64_t more = -1;
                 size_t moreSize = sizeof(more);
                 rc = zmq_getsockopt(r, ZMQ_RCVMORE, &more, &moreSize);
@@ -229,14 +241,18 @@ public:
                 else {
                     rc = zmq_recv(r, args.data(), args.size(), 0);
                     ZCheck(rc);
+                    Log("service>> request data received");
                     rep = service_.Invoke(reqid, args);
+                    Log("service>> request executed");
                 }
                 ZCheck(zmq_send(r, &id[0], size_t(irc), ZMQ_SNDMORE));
                 ZCheck(zmq_send(r, 0, 0, ZMQ_SNDMORE));
                 ZCheck(zmq_send(r, rep.data(), rep.size(), 0));
+                Log("service>> reply sent");
             }
         }
         ZCleanup(ctx, r);
+        Log("service>> " + uri_ + " stopped");
     }
     void Stop() { status_ = STOPPED; } //invoke from separate thread
 private:
@@ -277,6 +293,7 @@ public:
         Stop();
     }
     void Start(const char* URI) {
+        stop_ = false;
         void* ctx = zmq_ctx_new();
         ZCheck(ctx);
         void* r = zmq_socket(ctx, ZMQ_ROUTER);
@@ -295,6 +312,7 @@ public:
                 ZCheck(rc);
                 const std::string serviceName
                         = UnPack< std::string >(begin(buffer));
+                Log("server>> " + serviceName + " requested");
                 if(!Exists(serviceName)) {
                     const std::string error =
                             "No " + serviceName + " available";
@@ -312,6 +330,7 @@ public:
                     auto f = std::async(std::launch::async,
                                         executeService,
                                         &service);
+                    Log("server>> Started service at " + service.GetURI());
                     serviceFutures_[serviceName] = std::move(f);
                     ByteArray rep = Pack(service.GetURI());
                     ZCheck(zmq_send(r, &id[0], size_t(irc), ZMQ_SNDMORE));
@@ -322,6 +341,7 @@ public:
         }
         ZCleanup(ctx, r);
         StopServices();
+        Log("server>> stopped");
     }
     void StopServices() {
         std::map< std::string, Service >::iterator si
@@ -369,7 +389,7 @@ public:
             sp_->recvBuf_.resize(0);
             sp_->sendBuf_ = Pack(std::make_tuple(args...),
                                  std::move(sp_->sendBuf_));
-            sp_->Send();
+            sp_->Send(reqid_);
             return std::move(sp_->recvBuf_);
         }
     private:
@@ -382,18 +402,19 @@ public:
     ServiceProxy(const ServiceProxy&) = delete;
     ServiceProxy(ServiceProxy&&) = default;
     ServiceProxy& operator=(const ServiceProxy&) = delete;
-    ServiceProxy(const char* serviceManagerURI, const char* serviceName) {
+    ServiceProxy(const char* serviceManagerURI, const char* serviceName) :
+            recvBuf_(0x1000) {
         Connect(GetServiceURI(serviceManagerURI, serviceName));
     }
     RemoteInvoker operator[](int id) {
         return RemoteInvoker(this, id);
     }
     template < typename R, typename...ArgsT >
-    R Request(ArgsT...args) {
+    R Request(int reqid, ArgsT...args) {
         sendBuf_.resize(0);
-        recvBuf_.resize(0);
-        sendBuf_ = Pack(make_tuple(args...), std::move(sendBuf_));
-        Send();
+        //recvBuf_.resize(0);
+        sendBuf_ = Pack(std::make_tuple(args...), std::move(sendBuf_));
+        Send(reqid);
         return UnPack< R >(begin(recvBuf_));
 
     };
@@ -409,12 +430,13 @@ private:
         void* tmpSocket = zmq_socket(tmpCtx, ZMQ_REQ);
         ZCheck(tmpSocket);
         ZCheck(zmq_connect(tmpSocket, serviceManagerURI));
-        ZCheck(zmq_send(tmpSocket, serviceName, strlen(serviceName), 0));
+        ByteArray req = Pack(std::string(serviceName));
+        ZCheck(zmq_send(tmpSocket, req.data(), req.size(), 0));
         ByteArray rep(0x10000);
         int rc = zmq_recv(tmpSocket, rep.data(), rep.size(), 0);
         ZCheck(rc);
         ZCleanup(tmpCtx, tmpSocket);
-        return std::string(begin(rep), begin(rep) + rc);
+        return To< std::string >(rep);
     }
     void Connect(const std::string& serviceURI) {
         ctx_ = zmq_ctx_new();
@@ -422,10 +444,13 @@ private:
         serviceSocket_ = zmq_socket(ctx_, ZMQ_REQ);
         ZCheck(serviceSocket_);
         ZCheck(zmq_connect(serviceSocket_, serviceURI.c_str()));
+        Log("client>> connected to " + serviceURI);
     }
 private:
-    void Send() {
+    void Send(int reqid) {
+        ZCheck(zmq_send(serviceSocket_, &reqid, sizeof(reqid), ZMQ_SNDMORE));
         ZCheck(zmq_send(serviceSocket_, sendBuf_.data(), sendBuf_.size(), 0));
+        Log("client>> sent data");
         ZCheck(zmq_recv(serviceSocket_, recvBuf_.data(), recvBuf_.size(), 0));
     }
 private:
@@ -444,12 +469,19 @@ int main(int, char**) {
     //FileService
     enum {FS_LS = 1};
     ServiceImpl si;
-    function< vector< string > (const string&) > f = [](const std::string& dir) {
-        return std::vector< string >{"1", "2", "three"};};
-
-    Method< vector< string >, const string& > m = f;
-    //Method< int, int > m f;
-    //si.Add(FS_LS, MethodImpl(m));
+    struct FSMethod : IMethod {
+        ByteArray Invoke(const ByteArray& args) {
+            tuple< string > arg = To< tuple< string > >(args);
+            const string dir = get< 0 >(arg);
+            Log("service>> args: " + dir);
+            const std::vector< string > rep = {dir + "/1", dir + "/2"};
+            return Pack(rep);
+        }
+        IMethod* Clone() const {
+            return new FSMethod;
+        }
+    };
+    si.Add(FS_LS, MethodImpl(new FSMethod));
     Service fs("ipc://file-service", si);
     //Add to service manager
     ServiceManager sm;
@@ -460,9 +492,9 @@ int main(int, char**) {
     //Client
     ServiceProxy sp("ipc://service-manager", "file service");
     //Execute remote method
-    vector< string > lsresult = sp[FS_LS]("/");
+    vector< string > lsresult = sp.Request< decltype(lsresult) >(FS_LS, string("mydir"));
     copy(begin(lsresult), end(lsresult),
          ostream_iterator< string >(cout, "\n"));
-
+    sm.Stop();
     return EXIT_SUCCESS;
 }
