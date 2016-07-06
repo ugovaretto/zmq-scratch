@@ -74,19 +74,19 @@ struct MakeIndexSequence< 0, Ints... >  {
     using Type = IndexSequence< Ints... >;
 };
 
-template < typename R, int...Ints, typename...ArgsT >
-R CallHelper(std::function< R (ArgsT...) > f,
+template < typename R, typename...FArgsT, int...Ints, typename...ArgsT >
+R CallHelper(std::function< R (FArgsT...) > f,
              std::tuple< ArgsT... > args,
              const IndexSequence< Ints... >& ) {
     return f(std::get< Ints >(args)...);
 };
 
 
-template < typename R, int...Ints, typename...ArgsT >
-R Call(std::function< R (ArgsT...) > f,
+template < typename R, typename...FArgsT, int...Ints, typename...ArgsT >
+R Call(std::function< R (FArgsT...) > f,
        std::tuple< ArgsT... > args) {
     return CallHelper(f, args,
-                      MakeIndexSequence< sizeof...(ArgsT) >::Type());
+                      typename MakeIndexSequence< sizeof...(ArgsT) >::Type());
 };
 
 
@@ -111,10 +111,14 @@ public:
     Method() = default;
     Method(const std::function< R (ArgsT...) >& f) : f_(f) {}
     Method(const Method&) = default;
-    Method* Clone() const { return Method(*this); }
+    Method* Clone() const { return new Method< R, ArgsT... >(*this); }
     ByteArray Invoke(const ByteArray& args) {
-        std::tuple< ArgsT... > params =
-                UnPack< std::tuple< ArgsT... > >(begin(args));
+        std::tuple<
+                    typename std::remove_reference< typename
+                        std::remove_cv< ArgsT >::type >::type... > params =
+                UnPack< std::tuple<
+                                    typename std::remove_reference< typename
+                                    std::remove_cv< ArgsT >::type >::type... > >(begin(args));
         R ret = Call(f_, params);
         return Pack(ret);
     }
@@ -141,7 +145,7 @@ private:
 
 class MethodImpl {
 public:
-    MethodImpl() : method_( new EmptyMethod) {}
+    MethodImpl() : method_(new EmptyMethod) {}
     MethodImpl(const MethodImpl& mi) :
             method_(mi.method_ ? mi.method_->Clone() : nullptr) {}
     MethodImpl& operator=(const MethodImpl& mi) {
@@ -443,9 +447,9 @@ int main(int, char**) {
     function< vector< string > (const string&) > f = [](const std::string& dir) {
         return std::vector< string >{"1", "2", "three"};};
 
-    Method< vector< string > (const string&) > m = f;
-
-    si.Add(FS_LS, MethodImpl(m));
+    Method< vector< string >, const string& > m = f;
+    //Method< int, int > m f;
+    //si.Add(FS_LS, MethodImpl(m));
     Service fs("ipc://file-service", si);
     //Add to service manager
     ServiceManager sm;

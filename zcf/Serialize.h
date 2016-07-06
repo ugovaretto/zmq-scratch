@@ -245,9 +245,12 @@ ByteArray  Pack(const T& d, ByteArray ba = ByteArray()) {
 }
 
 template < typename T >
-T UnPack(ConstByteIterator bi) {
-    T d;
-    GetSerializer< T >::Type::UnPack(bi, d);
+typename std::remove_reference<
+        typename std::remove_cv< T >::type >::type UnPack(ConstByteIterator bi) {
+    using U = typename std::remove_reference<
+            typename std::remove_cv< T >::type >::type;
+    U d;
+    GetSerializer< U >::Type::UnPack(bi, d);
     return d;
 }
 
