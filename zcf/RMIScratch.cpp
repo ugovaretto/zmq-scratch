@@ -2,6 +2,8 @@
 // Created by Ugo Varetto on 7/4/16.
 //
 
+//Remote method invocation implementation
+
 ///@todo Make type safe: no check is performed when de-serializing
 ///consider optional addition of type information for each serialized type
 ///return method signature and description from service
@@ -93,8 +95,15 @@ R Call(std::function< R (ArgsT...) > f,
 //==============================================================================
 struct IMethod {
     virtual ByteArray Invoke(const ByteArray& args) = 0;
+    virtual IMethod* Clone() const = 0;
     virtual ~IMethod(){}
 };
+
+struct EmptyMethod : IMethod {
+    ByteArray Invoke(const ByteArray& ) { return ByteArray();}
+    virtual IMethod* Clone() const { return new EmptyMethod; };
+};
+
 
 template < typename R, typename...ArgsT >
 class Method : public IMethod {
@@ -102,6 +111,7 @@ public:
     Method() = default;
     Method(const std::function< R (ArgsT...) >& f) : f_(f) {}
     Method(const Method&) = default;
+    Method* Clone() const { return Method(*this); }
     ByteArray Invoke(const ByteArray& args) {
         std::tuple< ArgsT... > params =
                 UnPack< std::tuple< ArgsT... > >(begin(args));
@@ -118,6 +128,7 @@ public:
     Method() = default;
     Method(const std::function< void (ArgsT...) >& f) : f_(f) {}
     Method(const Method&) = default;
+    Method* Clone() const { return Method(*this); }
     ByteArray Invoke(const ByteArray& args) {
         std::tuple< ArgsT... > params =
                 UnPack< std::tuple< ArgsT... > >(begin(args));
@@ -127,13 +138,16 @@ private:
     std::function< void (ArgsT...) > f_;
 };
 
-template < typename R, typename...ArgsT >
-Method< R, ArgsT... > MakeMethod(const std::function< R (ArgsT...) >& f) {
-    return Method< R, ArgsT... >(f);
-};
 
 class MethodImpl {
 public:
+    MethodImpl() : method_( new EmptyMethod) {}
+    MethodImpl(const MethodImpl& mi) :
+            method_(mi.method_ ? mi.method_->Clone() : nullptr) {}
+    MethodImpl& operator=(const MethodImpl& mi) {
+        method_.reset(mi.method_->Clone());
+        return *this;
+    }
     template < typename R, typename...ArgsT >
     MethodImpl(const Method< R, ArgsT... >& m)
             : method_(new Method< R, ArgsT... >(m)) {}
@@ -144,6 +158,10 @@ private:
     std::unique_ptr< IMethod > method_;
 };
 
+template < typename R, typename...ArgsT >
+MethodImpl MakeMethod(const std::function< R (ArgsT...) >& f) {
+    return MethodImpl(Method< R, ArgsT... >(f));
+};
 
 //==============================================================================
 //SERVICE
@@ -172,13 +190,14 @@ class Service {
 public:
     enum Status {STOPPED, STARTED};
 public:
+    Service() = default;
     Service(const std::string& URI, const ServiceImpl& si)
             : status_(STOPPED), uri_(URI), service_(si) {}
     Status GetStatus() const  { return status_; }
     std::string GetURI() const {
         return uri_;
     }
-    string Start() {
+    void Start() {
         status_ = STARTED;
         void* ctx = zmq_ctx_new();
         ZCheck(ctx);
@@ -189,7 +208,7 @@ public:
         int reqid = -1;
         ByteArray args(0x10000); ///@todo configurable buffer size
         ByteArray rep;
-        vector< char > id(10, char(0));
+        std::vector< char > id(10, char(0));
         while(status_ != STOPPED) {
             zmq_poll(items, 1, 20); //poll with 20ms timeout
             if(items[0].revents & ZMQ_POLLIN) {
@@ -260,7 +279,7 @@ public:
         ZCheck(r);
         ZCheck(zmq_bind(r, URI));
         zmq_pollitem_t items[] = { { r, 0, ZMQ_POLLIN, 0 } };
-        vector< char > id(10, char(0));
+        std::vector< char > id(10, char(0));
         ByteArray buffer(0x10000);
         while(!stop_) {
             ZCheck(zmq_poll(items, 1, 100)); //poll with 100ms timeout
@@ -283,8 +302,7 @@ public:
                     //we need to get a reference to the service in order
                     //not to access the map from a separate thread
                     Service& service = this->services_[serviceName];
-                    auto executeService = [this](const std::string& name,
-                                                 Service* pservice) {
+                    auto executeService = [](Service* pservice) {
                         pservice->Start();
                     };
                     auto f = std::async(std::launch::async,
@@ -326,6 +344,36 @@ private:
 ///@todo should I call it ServiceClient instead of ServiceProxy ?
 class ServiceProxy {
 public:
+
+    struct ByteArrayWrapper {
+        ByteArrayWrapper(ByteArray&& ba) : ba_(std::move(ba)) {}
+        template < typename T >
+        operator T() const {
+            return To< T >(ba_);
+        }
+        ByteArray ba_;
+    };
+
+    class RemoteInvoker {
+    public:
+        RemoteInvoker(ServiceProxy *sp, int reqid) :
+                sp_(sp), reqid_(reqid) { }
+
+        template<typename...ArgsT>
+        ByteArrayWrapper operator()(ArgsT...args) {
+            sp_->sendBuf_.resize(0);
+            sp_->recvBuf_.resize(0);
+            sp_->sendBuf_ = Pack(std::make_tuple(args...),
+                                 std::move(sp_->sendBuf_));
+            sp_->Send();
+            return std::move(sp_->recvBuf_);
+        }
+    private:
+        ServiceProxy* sp_;
+        int reqid_;
+    };
+    friend class RemoteInvoker;
+public:
     ServiceProxy() = delete;
     ServiceProxy(const ServiceProxy&) = delete;
     ServiceProxy(ServiceProxy&&) = default;
@@ -349,39 +397,7 @@ public:
         ZCleanup(ctx_, serviceSocket_);
     }
 private:
-    struct ByteArrayWrapper {
-        ByteArrayWrapper(ByteArray&& ba) : ba_(std::move(ba)) {}
-        ByteArrayWrapper(ByteArrayWrapper&&) = default;
-        template < typename T >
-        operator T() {
-            T d;
-            UnPack(begin(ba_), d;
-            return d;
-        }
-        ByteArray ba_;
-    };
-    template < typename R >
-    inline R& operator=(R& r, const ByteArrayWrapper& baw) {
-        UnPack(begin(baw.ba_), r);
-        return r;
-    }
-    friend class RemoteInvoker {
-    public:
-        RemoteInvoker(ServiceProxy* sp, int reqid) :
-                sp_(sp), reqid_(reqid) {}
-        template < typename...ArgsT >
-        ByteArrayWrapper operator()(ArgsT...args) {
-            sp_->sendBuf_.resize(0);
-            sp_->recvBuf_.resize(0);
-            sp_->sendBuf_ = Pack(make_tuple(args...),
-                                 std::move(sp_->sendBuf_));
-            sp_->Send();
-            return ByteArrayWrapper(std::move(sp_->sendBuf_));
-        }
-    private:
-        ServiceProxy* sp_;
-        int reqid_;
-    };
+
     std::string GetServiceURI(const char* serviceManagerURI,
                               const char* serviceName) {
         void* tmpCtx = zmq_ctx_new();
@@ -416,7 +432,7 @@ private:
 };
 
 
-//=============================================================================
+//==============================================================================
 //DRIVER
 //==============================================================================
 using namespace std;
@@ -424,14 +440,18 @@ int main(int, char**) {
     //FileService
     enum {FS_LS = 1};
     ServiceImpl si;
-    si.Add(FS_LS, MakeMethod([](const std::string& dir) {
-        return std::vector< string >{"1", "2", "three"};}));
+    function< vector< string > (const string&) > f = [](const std::string& dir) {
+        return std::vector< string >{"1", "2", "three"};};
+
+    Method< vector< string > (const string&) > m = f;
+
+    si.Add(FS_LS, MethodImpl(m));
     Service fs("ipc://file-service", si);
     //Add to service manager
     ServiceManager sm;
     sm.Add("file service", fs);
     //Start service manager in separate thread
-    auto s = async(launch::async, sm.Start("ipc://service-manager"));
+    auto s = async(launch::async, [&sm](){sm.Start("ipc://service-manager");});
 
     //Client
     ServiceProxy sp("ipc://service-manager", "file service");

@@ -255,3 +255,8 @@ template < typename T >
 ConstByteIterator UnPack(ConstByteIterator bi, T& d) {
     return GetSerializer< T >::Type::UnPack(bi, d);
 }
+
+template< typename T >
+T To(const ByteArray& ba) {
+    return UnPack< T >(begin(ba));
+}
