@@ -4,6 +4,8 @@
 
 //Remote method invocation implementation
 
+///@todo add support for querying method list and signature
+
 ///@todo cleanup, tests with asserts
 
 ///@todo resize receive buffer before and after recv
@@ -53,7 +55,7 @@
 //==============================================================================
 //UTILITY
 //==============================================================================
-#define LOG__
+//#define LOG__
 
 void Log(const std::string& msg) {
 #ifdef LOG__
@@ -134,6 +136,8 @@ struct RemoveAll {
 struct IMethod {
     virtual ByteArray Invoke(const ByteArray& args) = 0;
     virtual IMethod* Clone() const = 0;
+    //vector< string > Signature() const = 0; todo add signature
+    //string Description() const = 0; todo add description
     virtual ~IMethod(){}
 };
 
@@ -237,10 +241,6 @@ private:
     std::unique_ptr< IMethod > method_;
 };
 
-//template < typename R, typename...ArgsT >
-//MethodImpl MakeMethod(const std::function< R (ArgsT...) >& f) {
-//    return MethodImpl(Method< R, ArgsT... >(f));
-//};
 
 //==============================================================================
 //SERVICE
@@ -320,11 +320,13 @@ public:
                     Log("service>> reply sent");
                 } catch(const std::exception& e) {
                     const std::string msg = e.what();
+                    Log("service>> exception: " + std::string(e.what()));
                     ZCheck(zmq_send(r, &id[0], size_t(irc), ZMQ_SNDMORE));
                     ZCheck(zmq_send(r, 0, 0, ZMQ_SNDMORE));
                     int errorStatus = SERVICE_ERROR;
                     ZCheck(zmq_send(r, &errorStatus, sizeof(errorStatus),
                                     ZMQ_SNDMORE));
+                    rep = Pack(msg);
                     ZCheck(zmq_send(r, rep.data(), rep.size(), 0));
 
                 }
@@ -603,18 +605,21 @@ int main(int, char**) {
             return new FSMethod;
         }
     };
-    //Sum
+    //Sum service
     //Method< int, int, int > sum([](const int& i1, int i2) { return i1 + i2;});
     MethodImpl mi(std::function< int (const int&, const int&) >(
             [](const int& i1, const int& i2) -> int { return i1 + i2;}));
 
+    //Add service
     enum {FS_LS = 1, SUM, EXCEPTIONAL, PI};
     si.Add(FS_LS, MethodImpl(new FSMethod));
     //si.Add(SUM, mi);
     si.Add(SUM, std::function< int (const int&, const int&) >(
             [](const int& i1, const int& i2) -> int { return i1 + i2;}));
-    si.Add(EXCEPTIONAL, std::function< void () >([](){throw std::runtime_error("EXCEPTION");}));
-    si.Add(PI, std::function< double () >([](){ return 3.14159265358979323846; }));
+    si.Add(EXCEPTIONAL, std::function< void () >(
+            [](){throw std::runtime_error("EXCEPTION");}));
+    si.Add(PI, std::function< double () >(
+            [](){ return 3.14159265358979323846; }));
     Service fs("ipc://file-service", si);
     //Add to service manager
     ServiceManager sm;
@@ -627,19 +632,24 @@ int main(int, char**) {
     //Execute remote methods
     const vector< string > lsresult =
             sp.Request< decltype(lsresult) >(FS_LS, string("mydir"));
-    copy(begin(lsresult), end(lsresult),
-         ostream_iterator< string >(cout, "\n"));
+    assert(lsresult == vector< string >({"mydir/1", "mydir/2"}));
     const int sumresult = sp.Request< int >(SUM, 5, 4);
+    assert(sumresult == 9);
     int ss = sp[SUM](7,4);
+    assert(ss == 11);
     try {
         sp[EXCEPTIONAL]();
+        assert(false);
     } catch(const RemoteServiceException& e) {
-        cout << "Remote Service Exception: " << e.what() << endl;
+        assert(e.what() == string("Service Error: EXCEPTION"));
     }
     const double MPI = sp[PI]();
-    cout << "7 + 4 = " << ss << endl;
-    cout << "5 + 4 = " << sumresult << endl;
-    cout << "PI    = " << MPI << endl;
+    assert(MPI == 3.14159265358979323846);
+
+    //stop services and service manager
     sm.Stop();
+
+    //passed
+    cout << "PASSED" << endl;
     return EXIT_SUCCESS;
 }
