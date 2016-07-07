@@ -4,6 +4,14 @@
 
 //Remote method invocation implementation
 
+//idioms used include value-based semantics, see e.g.:
+// https://parasol.tamu.edu/people/bs/622-GP/value-semantics.pdf
+// https://www.youtube.com/watch?v=_BpMYeUFXv8
+
+///@todo cleanup todos and enter remaining as issues on github
+
+///@todo add comments
+
 ///@todo add support for querying method list and signature
 
 ///@todo cleanup, tests with asserts
@@ -12,7 +20,7 @@
 
 ///@todo error handling
 
-///@todo should I make RemobeInvoker accessible ? In this case the buffer
+///@todo should I make RemoteInvoker accessible ? In this case the buffer
 ///has to be copied
 
 ///@todo typedef req id
@@ -85,6 +93,9 @@ void ZCleanup(void *context, void *zmqsocket) {
 
 //------------------------------------------------------------------------------
 //Template Meta Programming
+
+//note: index sequence and call are available in c++14 and 17
+
 template < int... > struct IndexSequence {};
 template < int M, int... Ints >
 struct MakeIndexSequence : MakeIndexSequence< M - 1, M - 1, Ints...> {};
@@ -142,7 +153,10 @@ struct IMethod {
 };
 
 struct EmptyMethod : IMethod {
-    ByteArray Invoke(const ByteArray& ) { return ByteArray();}
+    ByteArray Invoke(const ByteArray& ) {
+        throw std::invalid_argument("Method not implemented");
+        return ByteArray();
+    }
     virtual IMethod* Clone() const { return new EmptyMethod; };
 };
 
