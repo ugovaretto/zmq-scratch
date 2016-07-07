@@ -4,6 +4,8 @@
 
 //Remote method invocation implementation
 
+///@todo cleanup, tests with asserts
+
 ///@todo resize receive buffer before and after recv
 
 ///@todo error handling
@@ -179,6 +181,37 @@ private:
     std::function< void (ArgsT...) > f_;
 };
 
+
+template < typename R >
+class Method< R > : public IMethod {
+public:
+    Method() = default;
+    Method(const std::function< R () >& f) : f_(f) {}
+    Method(const Method&) = default;
+    Method* Clone() const { return new Method< R >(*this); }
+    ByteArray Invoke(const ByteArray&) {
+        R ret = f_();
+        return Pack(ret);
+    }
+private:
+    std::function< R () > f_;
+};
+
+template <>
+class Method< void > : public IMethod {
+public:
+    Method() = default;
+    Method(const std::function< void () >& f) : f_(f) {}
+    Method(const Method&) = default;
+    Method* Clone() const { return new Method< void >(*this); }
+    ByteArray Invoke(const ByteArray&) {
+        f_();
+        return ByteArray();
+    }
+private:
+    std::function< void () > f_;
+};
+
 class MethodImpl {
 public:
     MethodImpl() : method_(new EmptyMethod) {}
@@ -232,6 +265,7 @@ private:
 };
 
 //Service wrapper
+enum {SERVICE_ERROR = -1, SERVICE_NO_ERROR = 0};
 class Service {
 public:
     enum Status {STOPPED, STARTED};
@@ -264,22 +298,36 @@ public:
                 int rc = zmq_recv(r, &reqid, sizeof(int), 0);
                 ZCheck(rc);
                 Log("service>> request id: " + std::to_string(reqid));
-                int64_t more = -1;
+                int64_t more = 0;
                 size_t moreSize = sizeof(more);
                 rc = zmq_getsockopt(r, ZMQ_RCVMORE, &more, &moreSize);
                 ZCheck(rc);
-                if(!more) rep = service_.Invoke(reqid, ByteArray());
-                else {
-                    rc = zmq_recv(r, args.data(), args.size(), 0);
-                    ZCheck(rc);
-                    Log("service>> request data received");
-                    rep = service_.Invoke(reqid, args);
-                    Log("service>> request executed");
+                try {
+                    if(!more) rep = service_.Invoke(reqid, ByteArray());
+                    else {
+                        rc = zmq_recv(r, args.data(), args.size(), 0);
+                        ZCheck(rc);
+                        Log("service>> request data received");
+                        rep = service_.Invoke(reqid, args);
+                        Log("service>> request executed");
+                    }
+                    ZCheck(zmq_send(r, &id[0], size_t(irc), ZMQ_SNDMORE));
+                    ZCheck(zmq_send(r, 0, 0, ZMQ_SNDMORE));
+                    int okStatus = SERVICE_NO_ERROR;
+                    ZCheck(zmq_send(r, &okStatus, sizeof(okStatus),
+                                    ZMQ_SNDMORE));
+                    ZCheck(zmq_send(r, rep.data(), rep.size(), 0));
+                    Log("service>> reply sent");
+                } catch(const std::exception& e) {
+                    const std::string msg = e.what();
+                    ZCheck(zmq_send(r, &id[0], size_t(irc), ZMQ_SNDMORE));
+                    ZCheck(zmq_send(r, 0, 0, ZMQ_SNDMORE));
+                    int errorStatus = SERVICE_ERROR;
+                    ZCheck(zmq_send(r, &errorStatus, sizeof(errorStatus),
+                                    ZMQ_SNDMORE));
+                    ZCheck(zmq_send(r, rep.data(), rep.size(), 0));
+
                 }
-                ZCheck(zmq_send(r, &id[0], size_t(irc), ZMQ_SNDMORE));
-                ZCheck(zmq_send(r, 0, 0, ZMQ_SNDMORE));
-                ZCheck(zmq_send(r, rep.data(), rep.size(), 0));
-                Log("service>> reply sent");
             }
         }
         ZCleanup(ctx, r);
@@ -397,6 +445,21 @@ private:
 //SERVICE CLIENT PROXY
 //==============================================================================
 ///@todo should I call it ServiceClient instead of ServiceProxy ?
+
+bool ServiceError(int status) {
+    return status == SERVICE_ERROR;
+}
+
+struct RemoteServiceException : std::exception {
+    RemoteServiceException(const std::string& msg) : msg_(msg) {}
+    const char* what() const noexcept {
+        return msg_.c_str();
+    }
+private:
+    std::string msg_;
+};
+
+
 class ServiceProxy {
 private:
     struct ByteArrayWrapper {
@@ -419,6 +482,12 @@ private:
             sp_->sendBuf_.resize(0);
             sp_->sendBuf_ = Pack(std::make_tuple(args...),
                                  std::move(sp_->sendBuf_));
+            sp_->Send(reqid_);
+            return ByteArrayWrapper(sp_->recvBuf_);
+        }
+        const ByteArrayWrapper operator()() {
+            sp_->sendBuf_.resize(0);
+            sp_->sendBuf_.resize(0);
             sp_->Send(reqid_);
             return ByteArrayWrapper(sp_->recvBuf_);
         }
@@ -477,10 +546,33 @@ private:
     }
 private:
     void Send(int reqid) {
-        ZCheck(zmq_send(serviceSocket_, &reqid, sizeof(reqid), ZMQ_SNDMORE));
-        ZCheck(zmq_send(serviceSocket_, sendBuf_.data(), sendBuf_.size(), 0));
+        if(!sendBuf_.empty()) {
+            ZCheck(zmq_send(serviceSocket_, &reqid, sizeof(reqid),
+                            ZMQ_SNDMORE));
+            ZCheck(zmq_send(serviceSocket_, sendBuf_.data(), sendBuf_.size(),
+                            0));
+        } else {
+            ZCheck(zmq_send(serviceSocket_, &reqid, sizeof(reqid),
+                            0));
+        }
         Log("client>> sent data");
-        ZCheck(zmq_recv(serviceSocket_, recvBuf_.data(), recvBuf_.size(), 0));
+        int status = -1;
+        ZCheck(zmq_recv(serviceSocket_, &status, sizeof(status), 0));
+        int64_t more = 0;
+        size_t moreSize = sizeof(more);
+        ZCheck(zmq_getsockopt(serviceSocket_, ZMQ_RCVMORE, &more, &moreSize));
+        if(more) {
+            ZCheck(zmq_recv(serviceSocket_, recvBuf_.data(),
+                            recvBuf_.size(), 0));
+        }
+        if(ServiceError(status)) {
+            std::string errorMsg = "Service Error";
+            if(more) {
+                errorMsg += ": " + To< std::string >(recvBuf_);
+                throw RemoteServiceException(errorMsg);
+            }
+        }
+        Log("client>> received data");
     }
 private:
     ByteArray sendBuf_;
@@ -516,11 +608,13 @@ int main(int, char**) {
     MethodImpl mi(std::function< int (const int&, const int&) >(
             [](const int& i1, const int& i2) -> int { return i1 + i2;}));
 
-    enum {FS_LS = 1, SUM};
+    enum {FS_LS = 1, SUM, EXCEPTIONAL, PI};
     si.Add(FS_LS, MethodImpl(new FSMethod));
     //si.Add(SUM, mi);
     si.Add(SUM, std::function< int (const int&, const int&) >(
             [](const int& i1, const int& i2) -> int { return i1 + i2;}));
+    si.Add(EXCEPTIONAL, std::function< void () >([](){throw std::runtime_error("EXCEPTION");}));
+    si.Add(PI, std::function< double () >([](){ return 3.14159265358979323846; }));
     Service fs("ipc://file-service", si);
     //Add to service manager
     ServiceManager sm;
@@ -537,8 +631,15 @@ int main(int, char**) {
          ostream_iterator< string >(cout, "\n"));
     const int sumresult = sp.Request< int >(SUM, 5, 4);
     int ss = sp[SUM](7,4);
-    cout << ss << endl;
-    cout << sumresult << endl;
+    try {
+        sp[EXCEPTIONAL]();
+    } catch(const RemoteServiceException& e) {
+        cout << "Remote Service Exception: " << e.what() << endl;
+    }
+    const double MPI = sp[PI]();
+    cout << "7 + 4 = " << ss << endl;
+    cout << "5 + 4 = " << sumresult << endl;
+    cout << "PI    = " << MPI << endl;
     sm.Stop();
     return EXIT_SUCCESS;
 }
