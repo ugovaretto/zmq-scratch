@@ -20,7 +20,7 @@ size_t Size< std::string >(const std::string& s) { return s.size(); }
 
 
 void ZCheck(int ret) {
-    if(ret != 0) throw std::runtime_error(strerror(errno));
+    if(ret < 0) throw std::runtime_error(strerror(errno));
 }
 
 template < typename T >
