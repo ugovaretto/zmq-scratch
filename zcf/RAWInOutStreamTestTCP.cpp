@@ -12,6 +12,10 @@
 
 using namespace std;
 
+bool receive(const vector< char >& v) {
+    ...
+}
+
 int main(int argc, char** argv) {
     if(argc != 4) {
         cerr << "usage: "
