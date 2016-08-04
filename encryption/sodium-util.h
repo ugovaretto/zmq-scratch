@@ -34,6 +34,14 @@ inline KeyPair GenKeys() {
     return k;
 }
 
+void Init(void* p, size_t s) {
+    sodium_memzero(p, s);
+}
+
+bool IsZero(const void* p, size_t s) {
+    return bool(sodium_is_zero(reinterpret_cast< const unsigned char* >(p), s));
+}
+
 inline SharedSecret GenShared(const KeyPair& kp) {
     SharedSecret s;
     if(crypto_box_beforenm(s.data(), kp.pub.data(), kp.secret.data()) != 0) {}
@@ -49,6 +57,103 @@ inline Nonce GenNonce() {
 inline void Zero(KeyPair& kp) {
     sodium_memzero(kp.pub.data(), kp.pub.size());
     sodium_memzero(kp.secret.data(), kp.secret.size());
+}
+
+
+struct SecretNonce {
+  SharedSecret sharedSecret;
+  Nonce nonce;
+};
+
+namespace {
+SecretNonce HandShake(void *s, bool initiate) {
+    if (initiate) {
+        //0 generate and send nonce
+        Nonce nonce = GenNonce();
+        zmq_send(s, nonce.data(), nonce.size(), 0);
+        zmq_recv(s, nullptr, 0, 0);
+        //1 generate keys
+        KeyPair clientKeys = GenKeys();
+        //2 send public key to other endpoint
+        zmq_send(s, clientKeys.pub.data(), clientKeys.pub.size(), 0);
+        //3 receive public key from other endpoint
+        PublicKey serverPublicKey;
+        zmq_recv(s, serverPublicKey.data(), serverPublicKey.size(), 0);
+        //4 generate and send shared key through encrypted connection
+        SharedSecret sharedSecret = GenShared(clientKeys);
+        std::vector<unsigned char> ebuf(cipherlen(sharedSecret.size()));
+        if (crypto_box_easy(ebuf.data(),
+                            sharedSecret.data(),
+                            sharedSecret.size(), nonce.data(),
+                            serverPublicKey.data(), clientKeys.secret.data()) != 0) {
+            throw std::runtime_error("Encryption failed");
+        }
+
+        zmq_send(s, ebuf.data(), ebuf.size(), 0);
+        zmq_recv(s, nullptr, 0, 0);
+        Zero(clientKeys);
+        return {sharedSecret, nonce};
+    } else {
+        //0 receive noonce
+        Nonce nonce;
+        zmq_recv(s, nonce.data(), nonce.size(), 0);
+        zmq_send(s, nullptr, 0, 0);
+        //1 generate keys
+        KeyPair serverKeys = GenKeys();
+        //2 receive public key from client
+        PublicKey clientPublicKey;
+        zmq_recv(s, clientPublicKey.data(), clientPublicKey.size(), 0);
+        //3 send public key to client
+        zmq_send(s, serverKeys.pub.data(), serverKeys.pub.size(), 0);
+        //4 receive shared secret from client
+        SharedSecret sharedSecret;
+        std::vector<unsigned char> ebuf(cipherlen(sharedSecret.size()));
+        zmq_recv(s, ebuf.data(), ebuf.size(), 0);
+
+        if (crypto_box_open_easy(sharedSecret.data(), ebuf.data(), ebuf.size(),
+                                 nonce.data(),
+                                 clientPublicKey.data(),
+                                 serverKeys.secret.data()) != 0) {
+            throw std::domain_error("Decryption failed, invalid key");
+        }
+
+        //5 send ACK
+        zmq_send(s, nullptr, 0, 0);
+        Zero(serverKeys);
+        return {sharedSecret, nonce};
+    }
+}
+
+const std::vector<unsigned char> &Encrypt(const void *data,
+                                          size_t size,
+                                          const SharedSecret &sharedSecret,
+                                          const Nonce &nonce,
+                                          std::vector<unsigned char> &out) {
+    out.resize(cipherlen(size));
+    if (crypto_box_easy_afternm(out.data(),
+                                reinterpret_cast< const unsigned char * >(data),
+                                size, nonce.data(),
+                                sharedSecret.data()) != 0) {
+        throw std::runtime_error("Encryption failed - " + std::string(strerror(errno)));
+    }
+    return out;
+};
+
+const std::vector<unsigned char> &Decrypt(const void *in,
+                                          size_t size,
+                                          const SharedSecret &sharedSecret,
+                                          const Nonce &nonce,
+                                          std::vector<unsigned char> &out) {
+    out.resize(bufferlen(size));
+    if (crypto_box_open_easy_afternm(out.data(),
+                                     reinterpret_cast< const unsigned char * >(in),
+                                     size,
+                                     nonce.data(),
+                                     sharedSecret.data()) != 0) {
+        throw std::runtime_error("Encryption failed - " + std::string(strerror(errno)));
+    }
+    return out;
+}
 }
 
 #endif //ZMQ_SCRATCH_SODIUM_UTIL_H
