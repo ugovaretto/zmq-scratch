@@ -18,9 +18,16 @@ size_t Size(const T& v) { return sizeof(v); }
 template <>
 size_t Size< std::string >(const std::string& s) { return s.size(); }
 
-
-void ZCheck(int ret) {
+inline
+int ZCheck(int ret) {
     if(ret < 0) throw std::runtime_error(strerror(errno));
+    return ret;
+}
+
+template < typename T >
+T* ZCheck(T* ptr) {
+    if(!ptr) throw std::runtime_error("NULL pointer");
+    return ptr;
 }
 
 template < typename T >
